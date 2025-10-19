@@ -1,0 +1,41 @@
+name: Air Quality Pipeline
+
+on:
+  schedule:
+    - cron: "0 * * * *"   # Runs every hour (for feature pipeline)
+  workflow_dispatch:       # Allows manual trigger from GitHub Actions tab
+  push:
+    branches:
+      - main
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.10"
+
+    - name: Install Dependencies
+      run: |
+        pip install -r requirements.txt
+
+    - name: Run Feature Pipeline
+      env:
+        OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+        AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
+        HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      run: |
+        python feature_pipeline.py
+
+    - name: Run Model Training (daily)
+      if: github.event.schedule == '0 0 * * *'
+      env:
+        HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+      run: |
+        python train_model.py
