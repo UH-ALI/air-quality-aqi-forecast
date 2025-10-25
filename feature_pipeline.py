@@ -1,21 +1,15 @@
 """
 feature_pipeline.py
 Purpose:
-    - Fetch latest weather & air quality data from Open-Meteo
+    - Fetch latest weather & air quality data from Open-Meteo + OpenWeather
     - Compute features for PM2.5 prediction
     - Store results into Hopsworks Feature Store
-
-Run manually (for testing):
-    python feature_pipeline.py
 """
 
 import hopsworks
 import pandas as pd
 import requests
 import datetime
-import time
-from sklearn.preprocessing import StandardScaler
-from joblib import dump
 import os
 
 # --- SETTINGS ---
@@ -23,39 +17,73 @@ CITY = "Delhi"
 LAT = 28.6139
 LON = 77.2090
 
-# --- FETCH DATA ---
 def fetch_weather_data():
-    print("📡 Fetching data from Open-Meteo APIs...")
+    print("📡 Fetching hourly weather data from Open-Meteo...")
     end = datetime.datetime.utcnow()
-    start = end - datetime.timedelta(days=1)  # last 24 hours
+    start = end - datetime.timedelta(days=1)
+    
     url = (
-        f"https://air-quality-api.open-meteo.com/v1/air-quality?"
+        f"https://api.open-meteo.com/v1/forecast?"
         f"latitude={LAT}&longitude={LON}"
-        f"&hourly=pm2_5,pm10,so2,no2,o3,co,temperature_2m,relative_humidity_2m,"
-        f"surface_pressure,wind_speed_10m,wind_direction_10m"
+        f"&hourly=temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,wind_direction_10m"
         f"&start_date={start.strftime('%Y-%m-%d')}"
         f"&end_date={end.strftime('%Y-%m-%d')}"
-        "&timezone=UTC"
+        f"&timezone=UTC"
     )
     response = requests.get(url)
     data = response.json()
+    
+    if "hourly" not in data:
+        raise KeyError("❌ No 'hourly' key found in Open-Meteo response.")
+    
     df = pd.DataFrame(data["hourly"])
     df["time"] = pd.to_datetime(df["time"])
-    print(f"✅ Data fetched: {df.shape[0]} rows")
+    print(f"✅ Weather data fetched: {df.shape[0]} rows")
     return df
 
-# --- FEATURE ENGINEERING ---
-def engineer_features(df):
-    print("🧮 Engineering features...")
+
+def fetch_air_quality_data():
+    print("🌫️ Fetching air quality data from OpenWeather...")
+    API_KEY = os.getenv("OPENWEATHER_API_KEY")
+    url = f"http://api.openweathermap.org/data/2.5/air_pollution/history?lat={LAT}&lon={LON}&start={int((datetime.datetime.utcnow() - datetime.timedelta(days=1)).timestamp())}&end={int(datetime.datetime.utcnow().timestamp())}&appid={API_KEY}"
+    
+    response = requests.get(url)
+    data = response.json()
+    
+    if "list" not in data:
+        raise KeyError("❌ 'list' key not found in OpenWeather response.")
+    
+    aq_list = []
+    for item in data["list"]:
+        dt = datetime.datetime.utcfromtimestamp(item["dt"])
+        comps = item["components"]
+        comps["time"] = dt
+        aq_list.append(comps)
+    
+    df = pd.DataFrame(aq_list)
+    print(f"✅ Air quality data fetched: {df.shape[0]} rows")
+    return df
+
+
+def engineer_features(df_weather, df_pollution):
+    print("🧮 Merging and engineering features...")
+    df = pd.merge_asof(
+        df_pollution.sort_values("time"),
+        df_weather.sort_values("time"),
+        on="time",
+        direction="nearest",
+        tolerance=pd.Timedelta("1h")
+    )
     df["hour"] = df["time"].dt.hour
     df["day"] = df["time"].dt.day
     df["month"] = df["time"].dt.month
     df["pm_ratio"] = df["pm10"] / (df["pm2_5"] + 1e-3)
     df["temp_humid_interaction"] = df["temperature_2m"] * df["relative_humidity_2m"]
     df.dropna(inplace=True)
+    print(f"✅ Engineered features: {df.shape}")
     return df
 
-# --- STORE IN HOPSWORKS ---
+
 def store_in_hopsworks(df):
     print("🗄️ Logging into Hopsworks...")
     api_key = os.getenv("HOPSWORKS_API_KEY")
@@ -66,16 +94,18 @@ def store_in_hopsworks(df):
         name="pm25_features",
         version=1,
         primary_key=["time"],
-        description="Latest hourly weather & air-quality features for PM2.5 forecasting."
+        description="Hourly weather & air-quality features for PM2.5 forecasting"
     )
     fg.insert(df)
     print("✅ Data successfully stored in Hopsworks Feature Store!")
 
-# --- MAIN ---
+
 def main():
-    df_raw = fetch_weather_data()
-    df_feat = engineer_features(df_raw)
+    df_weather = fetch_weather_data()
+    df_pollution = fetch_air_quality_data()
+    df_feat = engineer_features(df_weather, df_pollution)
     store_in_hopsworks(df_feat)
+
 
 if __name__ == "__main__":
     main()
