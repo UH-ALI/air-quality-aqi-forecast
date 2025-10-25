@@ -5,3 +5,5 @@ hsfs
 joblib
 scikit-learn
 matplotlib
+hopsworks[python]
+pyarrow
