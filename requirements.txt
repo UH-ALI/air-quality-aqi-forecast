@@ -1,6 +1,6 @@
-requests
 pandas
-numpy
-hopsworks[python]==4.2.*
+requests
+scikit-learn
+joblib
+hopsworks[python]
 pyarrow
-python-dotenv

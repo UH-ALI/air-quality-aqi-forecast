@@ -2,7 +2,7 @@ name: Air Quality Pipeline
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Runs every hour (feature pipeline)
+    - cron: "0 * * * *"   # Runs every hour
   workflow_dispatch:       # Manual trigger
   push:
     branches:
@@ -23,7 +23,6 @@ jobs:
 
     - name: Install Dependencies
       run: |
-        pip install --upgrade pip
         pip install -r requirements.txt
 
     - name: Run Feature Pipeline
