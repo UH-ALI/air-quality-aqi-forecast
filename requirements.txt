@@ -1,6 +1,5 @@
 pandas
 requests
-hopsworks
 hsfs
 joblib
 scikit-learn
