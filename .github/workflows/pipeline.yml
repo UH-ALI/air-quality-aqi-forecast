@@ -28,9 +28,11 @@ jobs:
     - name: Run Feature Pipeline
       env:
         OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-        AQICN_API_KEY: ${{ secrets.AQICN_API_KEY }}
         HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       run: |
+        echo "🔧 Checking environment variables..."
+        echo "OPENWEATHER_API_KEY loaded? ${{ secrets.OPENWEATHER_API_KEY != '' }}"
+        echo "HOPSWORKS_API_KEY loaded? ${{ secrets.HOPSWORKS_API_KEY != '' }}"
         python feature_pipeline.py
 
     - name: Run Model Training (daily)
