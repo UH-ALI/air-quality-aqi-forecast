@@ -2,32 +2,49 @@ name: Air Quality Pipeline
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Runs every hour
-  workflow_dispatch:       # Manual trigger
-  push:
-    branches:
-      - main
+    # Run feature pipeline every hour
+    - cron: "0 * * * *"
+    # Run model retraining every day at midnight (UTC)
+    - cron: "0 0 * * *"
+  workflow_dispatch: # Allow manual runs from GitHub UI
 
 jobs:
-  run-pipeline:
+  feature_pipeline:
+    if: github.event.schedule == '0 * * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.10"
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
 
-    - name: Install Dependencies
-      run: |
-        pip install -r requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-    - name: Run Feature Pipeline
-      env:
-        OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-        HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-      run: |
-        python feature_pipeline.py
+      - name: Run Feature Pipeline
+        run: python feature_pipeline.py
+
+  model_retraining:
+    if: github.event.schedule == '0 0 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Model Retraining
+        run: python train_model.py
