@@ -2,8 +2,8 @@ name: Air Quality Pipeline
 
 on:
   schedule:
-    - cron: "0 * * * *"   # Runs every hour (for feature pipeline)
-  workflow_dispatch:       # Allows manual trigger from GitHub Actions tab
+    - cron: "0 * * * *"   # Runs every hour (feature pipeline)
+  workflow_dispatch:       # Manual trigger
   push:
     branches:
       - main
@@ -23,6 +23,7 @@ jobs:
 
     - name: Install Dependencies
       run: |
+        pip install --upgrade pip
         pip install -r requirements.txt
 
     - name: Run Feature Pipeline
@@ -30,14 +31,4 @@ jobs:
         OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
         HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
       run: |
-        echo "🔧 Checking environment variables..."
-        echo "OPENWEATHER_API_KEY loaded? ${{ secrets.OPENWEATHER_API_KEY != '' }}"
-        echo "HOPSWORKS_API_KEY loaded? ${{ secrets.HOPSWORKS_API_KEY != '' }}"
         python feature_pipeline.py
-
-    - name: Run Model Training (daily)
-      if: github.event.schedule == '0 0 * * *'
-      env:
-        HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
-      run: |
-        python train_model.py
