@@ -41,29 +41,44 @@ def fetch_weather_data():
     print(f"✅ Weather data fetched: {df.shape[0]} rows")
     return df
 
-
 def fetch_air_quality_data():
-    print("🌫️ Fetching air quality data from OpenWeather...")
-    API_KEY = os.getenv("OPENWEATHER_API_KEY")
-    url = f"http://api.openweathermap.org/data/2.5/air_pollution/history?lat={LAT}&lon={LON}&start={int((datetime.datetime.utcnow() - datetime.timedelta(days=1)).timestamp())}&end={int(datetime.datetime.utcnow().timestamp())}&appid={API_KEY}"
+    print("🌫️ Fetching air quality data from Open-Meteo (no API key needed)...")
+    end = datetime.datetime.utcnow()
+    start = end - datetime.timedelta(days=1)
     
+    url = (
+        f"https://air-quality-api.open-meteo.com/v1/air-quality?"
+        f"latitude={LAT}&longitude={LON}"
+        f"&hourly=pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone"
+        f"&start_date={start.strftime('%Y-%m-%d')}"
+        f"&end_date={end.strftime('%Y-%m-%d')}"
+        f"&timezone=UTC"
+    )
+
     response = requests.get(url)
     data = response.json()
-    
-    if "list" not in data:
-        raise KeyError("❌ 'list' key not found in OpenWeather response.")
-    
-    aq_list = []
-    for item in data["list"]:
-        dt = datetime.datetime.utcfromtimestamp(item["dt"])
-        comps = item["components"]
-        comps["time"] = dt
-        aq_list.append(comps)
-    
-    df = pd.DataFrame(aq_list)
+
+    if "hourly" not in data:
+        raise KeyError("❌ 'hourly' key not found in Open-Meteo air-quality response.")
+
+    df = pd.DataFrame(data["hourly"])
+    df["time"] = pd.to_datetime(df["time"])
+
+    # Rename columns for consistency with your feature engineering code
+    df.rename(
+        columns={
+            "pm10": "pm10",
+            "pm2_5": "pm2_5",
+            "carbon_monoxide": "co",
+            "nitrogen_dioxide": "no2",
+            "sulphur_dioxide": "so2",
+            "ozone": "o3",
+        },
+        inplace=True,
+    )
+
     print(f"✅ Air quality data fetched: {df.shape[0]} rows")
     return df
-
 
 def engineer_features(df_weather, df_pollution):
     print("🧮 Merging and engineering features...")
