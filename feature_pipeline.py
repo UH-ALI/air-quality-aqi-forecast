@@ -106,11 +106,12 @@ def store_in_hopsworks(df):
     fs = project.get_feature_store()
 
     fg = fs.get_or_create_feature_group(
-        name="pm25_features",
-        version=1,
-        primary_key=["time"],
-        description="Hourly weather & air-quality features for PM2.5 forecasting"
+    name="pm25_features_v2",     # new name
+    version=1,
+    primary_key=["time"],
+    description="Updated features (Open-Meteo AQ + weather)"
     )
+
     fg.insert(df)
     print("✅ Data successfully stored in Hopsworks Feature Store!")
 
