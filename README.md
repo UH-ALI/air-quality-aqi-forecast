@@ -91,22 +91,25 @@ The XGBoost model uses 30+ features including:
 
 ```
 .
-├── feature_pipeline.py      # Hourly data collection & feature engineering
-├── training_pipeline.py     # Weekly model training
-├── inference_pipeline.py    # 72-hour forecast generation
-├── requirements.txt         # Python dependencies
+├── feature_pipeline.py          # Hourly data collection & feature engineering
+├── training_pipeline.py         # Weekly model training
+├── inference_pipeline.py        # 72-hour forecast generation
+├── requirements.txt             # Python dependencies
 ├── .github/workflows/
-│   └── pipeline.yml        # GitHub Actions configuration
-└── README.md               # This file
+│   ├── feature-pipeline.yml    # Hourly feature collection workflow
+│   ├── training-pipeline.yml   # Weekly training workflow
+│   └── inference-pipeline.yml  # 6-hourly inference workflow
+├── .gitignore                  # Excluded files
+└── README.md                   # This file
 ```
 
 ## 🔄 Workflow Schedule
 
-- **Feature Pipeline**: Every hour (`0 * * * *`)
-- **Training Pipeline**: Every Sunday at midnight UTC (`0 0 * * 0`)
-- **Inference Pipeline**: Every 6 hours (`0 */6 * * *`)
+- **Feature Pipeline**: Every hour (`0 * * * *`) - `feature-pipeline.yml`
+- **Training Pipeline**: Every Sunday at midnight UTC (`0 0 * * 0`) - `training-pipeline.yml`
+- **Inference Pipeline**: Every 6 hours (`0 */6 * * *`) - `inference-pipeline.yml`
 
-All pipelines can also be triggered manually via `workflow_dispatch`.
+All pipelines can also be triggered manually via `workflow_dispatch` from the GitHub Actions tab.
 
 ## 📦 Output
 

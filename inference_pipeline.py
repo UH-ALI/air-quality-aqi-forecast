@@ -28,6 +28,15 @@ import json
 LAT = 28.6139
 LON = 77.2090
 
+# Default values for missing pollutant data (based on typical Delhi averages)
+DEFAULT_PM25 = 50.0  # µg/m³ - typical moderate PM2.5 level for Delhi
+DEFAULT_PM10 = 125.0  # µg/m³ - typical moderate PM10 level for Delhi
+PM10_PM25_RATIO = 2.5  # Typical ratio of PM10 to PM2.5 in urban environments
+DEFAULT_CO = 500.0  # µg/m³ - typical CO level
+DEFAULT_NO2 = 40.0  # µg/m³ - typical NO2 level
+DEFAULT_SO2 = 10.0  # µg/m³ - typical SO2 level
+DEFAULT_O3 = 60.0  # µg/m³ - typical O3 level
+
 def pm25_to_aqi(pm25):
     """
     Convert PM2.5 concentration (µg/m³) to US EPA AQI
@@ -177,7 +186,8 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
     for i, row in df_weather.iterrows():
         # Combine historical + predicted values
         all_pm25 = historical_pm25 + predictions
-        all_pm10 = historical_pm10 + ([predictions[-1] * 2.5] * len(predictions) if predictions else [])  # Rough PM10 estimate
+        # Estimate PM10 from PM2.5 using typical urban ratio when predictions exist
+        all_pm10 = historical_pm10 + ([predictions[-1] * PM10_PM25_RATIO] * len(predictions) if predictions else [])
         all_temp = historical_temp + [row['temperature_2m']] * len(predictions)
         
         # Build feature dictionary
@@ -243,19 +253,19 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
             features['temp_lag_24h'] = all_temp[-24]
         
         # Interaction features
-        recent_pm25 = all_pm25[-1] if all_pm25 else 50  # Default value
-        recent_pm10 = all_pm10[-1] if all_pm10 else 125
+        recent_pm25 = all_pm25[-1] if all_pm25 else DEFAULT_PM25
+        recent_pm10 = all_pm10[-1] if all_pm10 else DEFAULT_PM10
         
         features['pm_ratio'] = recent_pm10 / (recent_pm25 + 1e-3)
         features['temp_humid_interaction'] = row['temperature_2m'] * row['relative_humidity_2m']
         features['wind_pollution_interaction'] = row['wind_speed_10m'] * recent_pm25
         
-        # Pollutant features (use predictions or historical average)
+        # Pollutant features (use historical averages or defaults)
         features['pm10'] = recent_pm10
-        features['co'] = df_historical['co'].mean() if 'co' in df_historical.columns else 500
-        features['no2'] = df_historical['no2'].mean() if 'no2' in df_historical.columns else 40
-        features['so2'] = df_historical['so2'].mean() if 'so2' in df_historical.columns else 10
-        features['o3'] = df_historical['o3'].mean() if 'o3' in df_historical.columns else 60
+        features['co'] = df_historical['co'].mean() if 'co' in df_historical.columns else DEFAULT_CO
+        features['no2'] = df_historical['no2'].mean() if 'no2' in df_historical.columns else DEFAULT_NO2
+        features['so2'] = df_historical['so2'].mean() if 'so2' in df_historical.columns else DEFAULT_SO2
+        features['o3'] = df_historical['o3'].mean() if 'o3' in df_historical.columns else DEFAULT_O3
         
         # Fill any missing features with 0
         for col in feature_cols:
