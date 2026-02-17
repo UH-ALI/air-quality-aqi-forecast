@@ -183,12 +183,21 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
     historical_pm10 = df_historical['pm10'].tolist()
     historical_temp = df_historical['temperature_2m'].tolist()
     
+    # Track forecast values separately
+    forecast_temps = []
+    
     for i, row in df_weather.iterrows():
         # Combine historical + predicted values
         all_pm25 = historical_pm25 + predictions
-        # Estimate PM10 from PM2.5 using typical urban ratio when predictions exist
-        all_pm10 = historical_pm10 + ([predictions[-1] * PM10_PM25_RATIO] * len(predictions) if predictions else [])
-        all_temp = historical_temp + [row['temperature_2m']] * len(predictions)
+        # Estimate PM10 from PM2.5 using typical urban ratio
+        if predictions:
+            forecast_pm10 = [p * PM10_PM25_RATIO for p in predictions]
+        else:
+            forecast_pm10 = []
+        all_pm10 = historical_pm10 + forecast_pm10
+        
+        # Temperature: combine historical + forecast values
+        all_temp = historical_temp + forecast_temps
         
         # Build feature dictionary
         features = {}
@@ -260,8 +269,9 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
         features['temp_humid_interaction'] = row['temperature_2m'] * row['relative_humidity_2m']
         features['wind_pollution_interaction'] = row['wind_speed_10m'] * recent_pm25
         
-        # Pollutant features (use historical averages or defaults)
-        features['pm10'] = recent_pm10
+        # Pollutant features (use historical averages, not predictions to avoid circular dependency)
+        # PM10 comes from historical average to avoid circular logic with PM2.5 prediction
+        features['pm10'] = df_historical['pm10'].mean() if len(df_historical) > 0 else DEFAULT_PM10
         features['co'] = df_historical['co'].mean() if 'co' in df_historical.columns else DEFAULT_CO
         features['no2'] = df_historical['no2'].mean() if 'no2' in df_historical.columns else DEFAULT_NO2
         features['so2'] = df_historical['so2'].mean() if 'so2' in df_historical.columns else DEFAULT_SO2
@@ -280,6 +290,9 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
         pm25_pred = max(0, pm25_pred)  # Ensure non-negative
         
         predictions.append(pm25_pred)
+        
+        # Store forecast temperature for next iteration
+        forecast_temps.append(row['temperature_2m'])
         
         # Progress indicator
         if (i + 1) % 24 == 0:

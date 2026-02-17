@@ -130,8 +130,11 @@ def engineer_features(df_weather, df_pollution):
     # Add lag features
     df = create_lag_features(df)
     
+    # Drop rows with NaN (first 24 hours will be excluded due to lag features)
+    # This is intentional - we need complete lag features for accurate predictions
     df.dropna(inplace=True)
     print(f"✅ Engineered features: {df.shape}")
+    print(f"   Note: First 24 hours excluded due to lag feature requirements")
     return df
 
 
