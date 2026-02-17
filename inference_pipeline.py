@@ -126,6 +126,8 @@ def load_model_and_features():
     mr = project.get_model_registry()
     
     # Get latest version of model
+    # Note: Using version 1 for initial deployment. For production systems with
+    # model updates, consider using mr.get_best_model() or making version configurable.
     model = mr.get_model("pm25_xgboost", version=1)
     model_dir = model.download()
     
@@ -151,6 +153,8 @@ def get_recent_historical_data(fs, hours=72):
     """
     print(f"📊 Loading last {hours} hours of historical data...")
     
+    # Note: Using version 1 for initial deployment. Should match training pipeline version.
+    # For production, consider making version configurable.
     fg = fs.get_feature_group(name="pm25_features_v2", version=1)
     df = fg.read()
     

@@ -37,6 +37,8 @@ def load_features_from_hopsworks():
     fs = project.get_feature_store()
     
     # Get feature group (contains all historical data)
+    # Note: Using version 1 for initial deployment. For production systems,
+    # consider making version configurable or fetching latest dynamically.
     fg = fs.get_feature_group(name="pm25_features_v2", version=1)
     
     # Read ALL data (no filters - gets everything)
