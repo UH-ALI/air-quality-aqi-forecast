@@ -189,12 +189,10 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
     for i, row in df_weather.iterrows():
         # Combine historical + predicted values
         all_pm25 = historical_pm25 + predictions
-        # Estimate PM10 from PM2.5 using typical urban ratio
-        if predictions:
-            forecast_pm10 = [p * PM10_PM25_RATIO for p in predictions]
-        else:
-            forecast_pm10 = []
-        all_pm10 = historical_pm10 + forecast_pm10
+        # Use historical PM10 average consistently to avoid circular dependency
+        # (PM2.5 predictions should not influence PM10 lag features they depend on)
+        pm10_avg = df_historical['pm10'].mean() if len(df_historical) > 0 else DEFAULT_PM10
+        all_pm10 = historical_pm10 + [pm10_avg] * len(predictions)
         
         # Temperature: combine historical + forecast values
         all_temp = historical_temp + forecast_temps

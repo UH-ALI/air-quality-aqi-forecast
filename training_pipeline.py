@@ -95,7 +95,7 @@ def train_xgboost_model(X_train, y_train, X_val, y_val):
     - learning_rate: Step size (0.05 is conservative but stable)
     - subsample: Fraction of samples per tree (0.8 adds randomness)
     - colsample_bytree: Fraction of features per tree (0.8 prevents overfitting)
-    - early_stopping_rounds: Stop if no improvement on validation set for 50 rounds
+    - early_stopping_rounds: Stops training when validation metric doesn't improve for 50 rounds
     """
     print("🤖 Training XGBoost model...")
     

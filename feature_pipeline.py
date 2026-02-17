@@ -94,8 +94,9 @@ def create_lag_features(df, lags=[1, 3, 6, 12, 24]):
         df[f'temp_lag_{lag}h'] = df['temperature_2m'].shift(lag)
     
     # Rolling statistics (past 24 hours)
-    df['pm2_5_rolling_mean_24h'] = df['pm2_5'].rolling(window=24, min_periods=1).mean()
-    df['pm2_5_rolling_std_24h'] = df['pm2_5'].rolling(window=24, min_periods=1).std()
+    # Use min_periods=24 to ensure consistent window size (earlier rows will be NaN)
+    df['pm2_5_rolling_mean_24h'] = df['pm2_5'].rolling(window=24, min_periods=24).mean()
+    df['pm2_5_rolling_std_24h'] = df['pm2_5'].rolling(window=24, min_periods=24).std()
     
     return df
 
