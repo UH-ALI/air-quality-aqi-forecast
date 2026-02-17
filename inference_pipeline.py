@@ -157,8 +157,8 @@ def get_recent_historical_data(fs, hours=72):
     """
     print(f"📊 Loading last {hours} hours of historical data...")
     
-    # Note: Using version 1 for initial deployment. Should match training pipeline version.
-    # For production, consider making version configurable.
+    # Note: Name 'pm25_features_v2' (schema name) with version=1 (first version of this schema)
+    # Should match training pipeline. Consider making version configurable for production.
     fg = fs.get_feature_group(name="pm25_features_v2", version=1)
     df = fg.read()
     

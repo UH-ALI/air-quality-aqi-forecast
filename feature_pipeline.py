@@ -93,8 +93,8 @@ def create_lag_features(df, lags=[1, 3, 6, 12, 24]):
         df[f'pm10_lag_{lag}h'] = df['pm10'].shift(lag)
         df[f'temp_lag_{lag}h'] = df['temperature_2m'].shift(lag)
     
-    # Rolling statistics (past 24 hours)
-    # Use min_periods=24 to ensure consistent window size (earlier rows will be NaN)
+    # Rolling statistics - use min_periods=24 to calculate only from complete 24-hour windows
+    # Earlier rows (hours 1-23) will have NaN values and be dropped later
     df['pm2_5_rolling_mean_24h'] = df['pm2_5'].rolling(window=24, min_periods=24).mean()
     df['pm2_5_rolling_std_24h'] = df['pm2_5'].rolling(window=24, min_periods=24).std()
     
