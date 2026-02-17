@@ -49,7 +49,8 @@ def pm25_to_aqi(pm25):
     55.5 - 150.4   |151-200|  Unhealthy
     150.5 - 250.4  |201-300|  Very Unhealthy
     250.5 - 350.4  |301-400|  Hazardous
-    350.5+         |401-500|  Hazardous
+    350.5 - 500.4  |401-500|  Hazardous
+    500.5+         |  500  |  Beyond AQI (capped at 500)
     
     Formula: AQI = [(I_high - I_low) / (C_high - C_low)] * (C - C_low) + I_low
     """
@@ -65,8 +66,11 @@ def pm25_to_aqi(pm25):
         return 200 + ((300 - 200) / (250.4 - 150.5)) * (pm25 - 150.5)
     elif pm25 <= 350.4:
         return 300 + ((400 - 300) / (350.4 - 250.5)) * (pm25 - 250.5)
-    else:
+    elif pm25 <= 500.4:
         return 400 + ((500 - 400) / (500.4 - 350.5)) * (pm25 - 350.5)
+    else:
+        # Cap at 500 - AQI scale doesn't extend beyond 500
+        return 500.0
 
 def get_aqi_category(aqi):
     """Get AQI health category and color code"""
