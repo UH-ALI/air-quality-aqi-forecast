@@ -8,6 +8,7 @@ Purpose:
 
 import hopsworks
 import pandas as pd
+import numpy as np
 import requests
 import datetime
 import os
@@ -80,6 +81,25 @@ def fetch_air_quality_data():
     print(f"✅ Air quality data fetched: {df.shape[0]} rows")
     return df
 
+def create_lag_features(df, lags=[1, 3, 6, 12, 24]):
+    """
+    Create lag features for time series prediction
+    lags: hours to look back
+    """
+    df = df.sort_values('time').reset_index(drop=True)
+    
+    for lag in lags:
+        df[f'pm2_5_lag_{lag}h'] = df['pm2_5'].shift(lag)
+        df[f'pm10_lag_{lag}h'] = df['pm10'].shift(lag)
+        df[f'temp_lag_{lag}h'] = df['temperature_2m'].shift(lag)
+    
+    # Rolling statistics - use min_periods=24 to calculate only from complete 24-hour windows
+    # Earlier rows (hours 1-23) will have NaN values and be dropped later
+    df['pm2_5_rolling_mean_24h'] = df['pm2_5'].rolling(window=24, min_periods=24).mean()
+    df['pm2_5_rolling_std_24h'] = df['pm2_5'].rolling(window=24, min_periods=24).std()
+    
+    return df
+
 def engineer_features(df_weather, df_pollution):
     print("🧮 Merging and engineering features...")
     df = pd.merge_asof(
@@ -89,13 +109,33 @@ def engineer_features(df_weather, df_pollution):
         direction="nearest",
         tolerance=pd.Timedelta("1h")
     )
+    
+    # Temporal features
     df["hour"] = df["time"].dt.hour
     df["day"] = df["time"].dt.day
     df["month"] = df["time"].dt.month
+    df["day_of_week"] = df["time"].dt.dayofweek
+    df["is_weekend"] = (df["day_of_week"] >= 5).astype(int)
+    
+    # Cyclical encoding (captures circular nature of time)
+    df['hour_sin'] = np.sin(2 * np.pi * df['hour'] / 24)
+    df['hour_cos'] = np.cos(2 * np.pi * df['hour'] / 24)
+    df['month_sin'] = np.sin(2 * np.pi * df['month'] / 12)
+    df['month_cos'] = np.cos(2 * np.pi * df['month'] / 12)
+    
+    # Interaction features
     df["pm_ratio"] = df["pm10"] / (df["pm2_5"] + 1e-3)
     df["temp_humid_interaction"] = df["temperature_2m"] * df["relative_humidity_2m"]
+    df["wind_pollution_interaction"] = df["wind_speed_10m"] * df["pm2_5"]
+    
+    # Add lag features
+    df = create_lag_features(df)
+    
+    # Drop rows with NaN (first 24 hours will be excluded due to lag features)
+    # This is intentional - we need complete lag features for accurate predictions
     df.dropna(inplace=True)
     print(f"✅ Engineered features: {df.shape}")
+    print(f"   Note: First 24 hours excluded due to lag feature requirements")
     return df
 
 

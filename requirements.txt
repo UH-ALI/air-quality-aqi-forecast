@@ -1,6 +1,8 @@
 pandas
 requests
+numpy
 scikit-learn
 joblib
 hopsworks[python]
 pyarrow
+xgboost
