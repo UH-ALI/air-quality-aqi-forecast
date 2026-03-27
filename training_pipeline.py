@@ -3,21 +3,24 @@ training_pipeline.py
 
 Purpose:
     - Load historical features from Hopsworks (past year + daily updates)
-    - Train XGBoost model for PM2.5 prediction
-    - Evaluate model performance
-    - Save model to Hopsworks Model Registry
+    - Train two ML models for PM2.5 prediction:
+        1. XGBoost (gradient-boosted trees)
+        2. Random Forest (bagged decision trees)
+    - Compare model performance and select the best one
+    - Save both models + the best-model selection to Hopsworks Model Registry
 
 Training Strategy:
     - Uses ALL historical data stored in Hopsworks
     - Time-based split (80% train, 20% validation)
-    - Early stopping to prevent overfitting
-    - Saves model + feature names for inference
+    - Early stopping for XGBoost to prevent overfitting
+    - Saves models + feature names for inference
 """
 
 import hopsworks
 import pandas as pd
 import numpy as np
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
 import joblib
 import os
@@ -31,24 +34,27 @@ def load_features_from_hopsworks():
     print("🗄️ Connecting to Hopsworks...")
     api_key = os.getenv("HOPSWORKS_API_KEY")
     if not api_key:
-        raise ValueError("HOPSWORKS_API_KEY not found in environment variables")
-    
+        raise ValueError(
+            "❌ HOPSWORKS_API_KEY environment variable is not set.\n"
+            "   Please add it as a GitHub repository secret:\n"
+            "   Settings → Secrets and variables → Actions → New repository secret\n"
+            "   Name: HOPSWORKS_API_KEY\n"
+            "   Value: <your Hopsworks API key from Project Settings → API Keys>"
+        )
+
     project = hopsworks.login(api_key_value=api_key)
     fs = project.get_feature_store()
-    
+
     # Get feature group (contains all historical data)
-    # Note: Name includes 'v2' to distinguish from older schema, while version=1
-    # indicates this is the first version of this v2 schema. Using version 1 for
-    # initial deployment. Consider making version configurable for production.
     fg = fs.get_feature_group(name="pm25_features_v2", version=1)
-    
+
     # Read ALL data (no filters - gets everything)
     df = fg.read()
-    
+
     print(f"✅ Loaded {len(df)} rows from feature store")
     print(f"   Date range: {df['time'].min()} to {df['time'].max()}")
     print(f"   Total days: {(df['time'].max() - df['time'].min()).days}")
-    
+
     return df, fs, project
 
 def prepare_training_data(df):
@@ -85,24 +91,46 @@ def prepare_training_data(df):
     print(f"   Validation samples: {len(X_val)} ({len(X_val)/len(df)*100:.1f}%)")
     print(f"   Number of features: {len(feature_cols)}")
     print(f"   Features: {feature_cols[:10]}... (showing first 10)")
-    
+
     return X_train, X_val, y_train, y_val, feature_cols
+
+
+def _compute_metrics(model_name, y_train, y_train_pred, y_val, y_val_pred):
+    """Return a dict of performance metrics and print a summary."""
+    train_mae = mean_absolute_error(y_train, y_train_pred)
+    val_mae = mean_absolute_error(y_val, y_val_pred)
+    train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
+    val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
+    train_r2 = r2_score(y_train, y_train_pred)
+    val_r2 = r2_score(y_val, y_val_pred)
+
+    print(f"\n📊 {model_name} Performance:")
+    print(f"   TRAIN | MAE: {train_mae:.2f} µg/m³ | RMSE: {train_rmse:.2f} µg/m³ | R²: {train_r2:.4f}")
+    print(f"   VAL   | MAE: {val_mae:.2f} µg/m³ | RMSE: {val_rmse:.2f} µg/m³ | R²: {val_r2:.4f}")
+
+    return {
+        "train_mae": float(train_mae),
+        "val_mae": float(val_mae),
+        "train_rmse": float(train_rmse),
+        "val_rmse": float(val_rmse),
+        "train_r2": float(train_r2),
+        "val_r2": float(val_r2),
+    }
+
 
 def train_xgboost_model(X_train, y_train, X_val, y_val):
     """
-    Train XGBoost regression model for PM2.5 prediction
-    
-    Model hyperparameters explained:
-    - n_estimators: Number of trees (500 is good for medium datasets)
-    - max_depth: Maximum tree depth (8 prevents overfitting)
-    - learning_rate: Step size (0.05 is conservative but stable)
-    - subsample: Fraction of samples per tree (0.8 adds randomness)
-    - colsample_bytree: Fraction of features per tree (0.8 prevents overfitting)
-    - early_stopping_rounds: Stops if validation metric shows no improvement 
-      (even minimal) for 50 consecutive rounds, preventing overfitting
+    Train XGBoost regression model for PM2.5 prediction.
+
+    Hyperparameters:
+    - n_estimators=500: up to 500 trees (early stopping cuts this short)
+    - max_depth=8: tree depth balances expressiveness vs overfitting
+    - learning_rate=0.05: conservative step size for stability
+    - subsample/colsample_bytree=0.8: stochastic sampling reduces variance
+    - early_stopping_rounds=50: halts training if val loss doesn't improve
     """
-    print("🤖 Training XGBoost model...")
-    
+    print("\n🤖 Training XGBoost model...")
+
     model = XGBRegressor(
         n_estimators=500,
         max_depth=8,
@@ -111,118 +139,184 @@ def train_xgboost_model(X_train, y_train, X_val, y_val):
         colsample_bytree=0.8,
         random_state=42,
         early_stopping_rounds=50,
-        objective='reg:squarederror'
+        objective='reg:squarederror',
     )
-    
-    # Train with validation monitoring
+
     model.fit(
         X_train, y_train,
         eval_set=[(X_train, y_train), (X_val, y_val)],
-        verbose=50  # Print progress every 50 rounds
+        verbose=50,
     )
-    
-    # Evaluate on validation set
+
     y_train_pred = model.predict(X_train)
     y_val_pred = model.predict(X_val)
-    
-    # Calculate metrics
-    train_mae = mean_absolute_error(y_train, y_train_pred)
-    val_mae = mean_absolute_error(y_val, y_val_pred)
-    
-    train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
-    val_rmse = np.sqrt(mean_squared_error(y_val, y_val_pred))
-    
-    train_r2 = r2_score(y_train, y_train_pred)
-    val_r2 = r2_score(y_val, y_val_pred)
-    
-    print(f"\n📊 Model Performance:")
-    print(f"   TRAIN | MAE: {train_mae:.2f} µg/m³ | RMSE: {train_rmse:.2f} µg/m³ | R²: {train_r2:.4f}")
-    print(f"   VAL   | MAE: {val_mae:.2f} µg/m³ | RMSE: {val_rmse:.2f} µg/m³ | R²: {val_r2:.4f}")
-    
+
     # Feature importance
-    feature_importance = model.feature_importances_
-    print(f"\n🔝 Top 10 Most Important Features:")
     importance_df = pd.DataFrame({
         'feature': X_train.columns,
-        'importance': feature_importance
+        'importance': model.feature_importances_,
     }).sort_values('importance', ascending=False)
+    print("\n🔝 XGBoost – Top 10 Features:")
     print(importance_df.head(10).to_string(index=False))
-    
-    metrics = {
-        "train_mae": float(train_mae),
-        "val_mae": float(val_mae),
-        "train_rmse": float(train_rmse),
-        "val_rmse": float(val_rmse),
-        "train_r2": float(train_r2),
-        "val_r2": float(val_r2)
-    }
-    
+
+    metrics = _compute_metrics("XGBoost", y_train, y_train_pred, y_val, y_val_pred)
     return model, metrics
 
-def save_model_to_hopsworks(model, metrics, feature_cols, project):
+
+def train_random_forest_model(X_train, y_train, X_val, y_val):
     """
-    Save trained model to Hopsworks Model Registry
-    
-    Saves:
-    1. Model binary (XGBoost model)
-    2. Feature names (for inference)
-    3. Metrics (for tracking performance)
+    Train a Random Forest regression model for PM2.5 prediction.
+
+    Random Forest is an ensemble of independent decision trees (bagging).
+    It is robust to outliers and provides reliable feature importance estimates.
+
+    Hyperparameters:
+    - n_estimators=300: 300 independent trees for stable predictions
+    - max_depth=20: allows deep trees since bagging controls variance
+    - min_samples_split=5: avoids over-partitioning small leaves
+    - max_features='sqrt': standard heuristic for regression RF
+    - n_jobs=-1: use all CPU cores for parallel training
     """
-    print("💾 Saving model to Hopsworks Model Registry...")
-    
-    # Create local directory
+    print("\n🌲 Training Random Forest model...")
+
+    model = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=20,
+        min_samples_split=5,
+        max_features='sqrt',
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    model.fit(X_train, y_train)
+
+    y_train_pred = model.predict(X_train)
+    y_val_pred = model.predict(X_val)
+
+    # Feature importance
+    importance_df = pd.DataFrame({
+        'feature': X_train.columns,
+        'importance': model.feature_importances_,
+    }).sort_values('importance', ascending=False)
+    print("\n🔝 Random Forest – Top 10 Features:")
+    print(importance_df.head(10).to_string(index=False))
+
+    metrics = _compute_metrics("Random Forest", y_train, y_train_pred, y_val, y_val_pred)
+    return model, metrics
+
+
+def _save_single_model(model, model_filename, registry_name, metrics, feature_cols, mr, model_dir):
+    """Persist one model to disk and upload it to the Hopsworks Model Registry."""
+    model_path = os.path.join(model_dir, model_filename)
+    joblib.dump(model, model_path)
+    print(f"   ✓ Saved {registry_name} → {model_path}")
+
+    registry_model = mr.python.create_model(
+        name=registry_name,
+        metrics=metrics,
+        description=f"{registry_name} model for PM2.5 3-day forecasting (Delhi).",
+    )
+    registry_model.save(model_dir)
+    print(f"   ✓ Uploaded to Hopsworks as '{registry_name}' v{registry_model.version}")
+    return registry_model
+
+
+def save_models_to_hopsworks(
+    xgb_model, xgb_metrics,
+    rf_model, rf_metrics,
+    feature_cols, project
+):
+    """
+    Save both models to the Hopsworks Model Registry together with:
+    - Feature column list (required by inference pipeline)
+    - Individual metrics for each model
+    - A comparison summary indicating which model is best
+    """
+    print("\n💾 Saving models to Hopsworks Model Registry...")
+
     model_dir = "pm25_model"
     os.makedirs(model_dir, exist_ok=True)
-    
-    # Save model
-    model_path = f"{model_dir}/xgboost_model.pkl"
-    joblib.dump(model, model_path)
-    print(f"   ✓ Model saved to {model_path}")
-    
-    # Save feature names (CRITICAL for inference)
-    feature_path = f"{model_dir}/features.json"
+
+    # Determine the best model by validation MAE (lower is better)
+    if xgb_metrics["val_mae"] <= rf_metrics["val_mae"]:
+        best_name = "pm25_xgboost"
+        print(f"\n🏆 Best model: XGBoost (val MAE {xgb_metrics['val_mae']:.2f} vs RF {rf_metrics['val_mae']:.2f})")
+    else:
+        best_name = "pm25_rf"
+        print(f"\n🏆 Best model: Random Forest (val MAE {rf_metrics['val_mae']:.2f} vs XGB {xgb_metrics['val_mae']:.2f})")
+
+    # Save feature names (shared by both models)
+    feature_path = os.path.join(model_dir, "features.json")
     with open(feature_path, "w") as f:
         json.dump({"features": feature_cols}, f, indent=2)
-    print(f"   ✓ Feature names saved to {feature_path}")
-    
-    # Save metrics
-    metrics_path = f"{model_dir}/metrics.json"
-    with open(metrics_path, "w") as f:
-        json.dump(metrics, f, indent=2)
-    print(f"   ✓ Metrics saved to {metrics_path}")
-    
-    # Upload to Hopsworks Model Registry
+
+    # Save comparison summary
+    comparison = {
+        "xgboost": xgb_metrics,
+        "random_forest": rf_metrics,
+        "best_model": best_name,
+    }
+    with open(os.path.join(model_dir, "comparison.json"), "w") as f:
+        json.dump(comparison, f, indent=2)
+
     mr = project.get_model_registry()
-    
-    pm25_model = mr.python.create_model(
-        name="pm25_xgboost",
-        metrics=metrics,
-        description="XGBoost model for PM2.5 forecasting (next 72 hours). Trained on historical data with lag features."
+
+    # --- Upload XGBoost ---
+    # Write model-specific metrics file before uploading; avoids overwriting RF metrics.
+    with open(os.path.join(model_dir, "metrics.json"), "w") as f:
+        json.dump(xgb_metrics, f, indent=2)
+    _save_single_model(
+        xgb_model, "xgboost_model.pkl", "pm25_xgboost",
+        xgb_metrics, feature_cols, mr, model_dir,
     )
-    
-    pm25_model.save(model_dir)
-    
-    print("✅ Model successfully uploaded to Hopsworks Model Registry!")
-    print(f"   Model name: pm25_xgboost")
-    print(f"   Version: {pm25_model.version}")
+
+    # --- Upload Random Forest ---
+    with open(os.path.join(model_dir, "metrics.json"), "w") as f:
+        json.dump(rf_metrics, f, indent=2)
+    _save_single_model(
+        rf_model, "rf_model.pkl", "pm25_rf",
+        rf_metrics, feature_cols, mr, model_dir,
+    )
+
+    print("\n✅ Both models uploaded to Hopsworks Model Registry!")
+    print(f"   Best model for inference: {best_name}")
+    return best_name
+
 
 def main():
     print("=" * 60)
     print("🚀 PM2.5 FORECASTING MODEL TRAINING PIPELINE")
     print("=" * 60)
-    
+
     # Step 1: Load historical data
     df, fs, project = load_features_from_hopsworks()
-    
+
     # Step 2: Prepare training data
     X_train, X_val, y_train, y_val, feature_cols = prepare_training_data(df)
-    
-    # Step 3: Train model
-    model, metrics = train_xgboost_model(X_train, y_train, X_val, y_val)
-    
-    # Step 4: Save model to Hopsworks
-    save_model_to_hopsworks(model, metrics, feature_cols, project)
-    
+
+    # Step 3a: Train XGBoost
+    xgb_model, xgb_metrics = train_xgboost_model(X_train, y_train, X_val, y_val)
+
+    # Step 3b: Train Random Forest
+    rf_model, rf_metrics = train_random_forest_model(X_train, y_train, X_val, y_val)
+
+    # Step 4: Print model comparison
+    print("\n" + "=" * 60)
+    print("📊 MODEL COMPARISON SUMMARY")
+    print("=" * 60)
+    print(f"{'Metric':<18} {'XGBoost':>12} {'RandomForest':>14}")
+    print("-" * 46)
+    for key in ("val_mae", "val_rmse", "val_r2"):
+        label = key.replace("val_", "Val ").upper()
+        print(f"{label:<18} {xgb_metrics[key]:>12.4f} {rf_metrics[key]:>14.4f}")
+
+    # Step 5: Save both models to Hopsworks
+    save_models_to_hopsworks(
+        xgb_model, xgb_metrics,
+        rf_model, rf_metrics,
+        feature_cols, project,
+    )
+
     print("\n" + "=" * 60)
     print("✅ TRAINING PIPELINE COMPLETED SUCCESSFULLY!")
     print("=" * 60)

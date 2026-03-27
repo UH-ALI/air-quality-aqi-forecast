@@ -1,0 +1,44 @@
+name: Backfill Feature Pipeline
+
+# Run this ONCE manually to populate Hopsworks with a full year of historical data
+# before scheduling the daily feature pipeline.
+#
+# How to trigger:
+#   GitHub → Actions → "Backfill Feature Pipeline" → Run workflow
+#   Optionally override `backfill_days` (default: 365).
+
+on:
+  workflow_dispatch:
+    inputs:
+      backfill_days:
+        description: "Number of days of history to backfill (default: 365)"
+        required: false
+        default: "365"
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Backfill Feature Pipeline
+        env:
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+          BACKFILL_DAYS: ${{ github.event.inputs.backfill_days }}
+        run: |
+          echo "Backfilling $BACKFILL_DAYS days of historical data..."
+          python feature_pipeline.py

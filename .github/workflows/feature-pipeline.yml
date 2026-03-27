@@ -2,7 +2,7 @@ name: Feature Pipeline
 
 on:
   schedule:
-    - cron: "0 * * * *"  # Every hour
+    - cron: "0 0 * * *"  # Daily at midnight UTC
   workflow_dispatch:  # Allow manual trigger
   push:
     branches:
@@ -29,5 +29,6 @@ jobs:
       - name: Run Feature Pipeline
         env:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+          BACKFILL_DAYS: ${{ vars.BACKFILL_DAYS || '2' }}
         run: |
           python feature_pipeline.py

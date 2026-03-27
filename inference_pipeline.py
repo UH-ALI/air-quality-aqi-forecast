@@ -118,37 +118,85 @@ def fetch_weather_forecast():
 
 def load_model_and_features():
     """
-    Load trained model and feature definitions from Hopsworks Model Registry
+    Load both trained models and feature definitions from Hopsworks Model Registry.
+    Falls back gracefully if only one model is available.
+
+    Returns:
+        models      – dict  {"xgboost": <model>, "random_forest": <model>}
+        feature_cols – list of feature column names
+        best_model  – name of the best model recorded during training
+        fs, project – Hopsworks handles
     """
-    print("🗄️ Loading model from Hopsworks Model Registry...")
-    
+    print("🗄️ Loading models from Hopsworks Model Registry...")
+
     api_key = os.getenv("HOPSWORKS_API_KEY")
     if not api_key:
-        raise ValueError("HOPSWORKS_API_KEY not found")
-    
+        raise ValueError(
+            "❌ HOPSWORKS_API_KEY environment variable is not set.\n"
+            "   Please add it as a GitHub repository secret:\n"
+            "   Settings → Secrets and variables → Actions → New repository secret\n"
+            "   Name: HOPSWORKS_API_KEY\n"
+            "   Value: <your Hopsworks API key from Project Settings → API Keys>"
+        )
+
     project = hopsworks.login(api_key_value=api_key)
     mr = project.get_model_registry()
-    
-    # Get latest version of model
-    # Note: Using version 1 for initial deployment. For production systems with
-    # model updates, consider using mr.get_best_model() or making version configurable.
-    model = mr.get_model("pm25_xgboost", version=1)
-    model_dir = model.download()
-    
-    # Load model binary
-    model_obj = joblib.load(f"{model_dir}/xgboost_model.pkl")
-    print(f"   ✓ Model loaded")
-    
-    # Load feature names
-    with open(f"{model_dir}/features.json", "r") as f:
-        feature_data = json.load(f)
-        feature_cols = feature_data["features"]
-    print(f"   ✓ Feature names loaded ({len(feature_cols)} features)")
-    
-    # Get feature store
     fs = project.get_feature_store()
-    
-    return model_obj, feature_cols, fs, project
+
+    models = {}
+    feature_cols = None
+    best_model = "pm25_xgboost"
+
+    # --- Load XGBoost ---
+    try:
+        xgb_reg = mr.get_model("pm25_xgboost", version=1)
+        model_dir = xgb_reg.download()
+
+        models["xgboost"] = joblib.load(os.path.join(model_dir, "xgboost_model.pkl"))
+        print(f"   ✓ XGBoost model loaded")
+
+        # Read feature list (same for both models)
+        features_path = os.path.join(model_dir, "features.json")
+        if os.path.exists(features_path):
+            with open(features_path) as f:
+                feature_cols = json.load(f)["features"]
+
+        # Read best-model annotation from saved metrics
+        metrics_path = os.path.join(model_dir, "metrics.json")
+        if os.path.exists(metrics_path):
+            with open(metrics_path) as f:
+                meta = json.load(f)
+                best_model = meta.get("best_model", best_model)
+    except Exception as e:
+        print(f"   ⚠️  Could not load XGBoost model: {e}")
+
+    # --- Load Random Forest ---
+    try:
+        rf_reg = mr.get_model("pm25_rf", version=1)
+        rf_dir = rf_reg.download()
+        models["random_forest"] = joblib.load(os.path.join(rf_dir, "rf_model.pkl"))
+        print(f"   ✓ Random Forest model loaded")
+
+        if feature_cols is None:
+            features_path = os.path.join(rf_dir, "features.json")
+            if os.path.exists(features_path):
+                with open(features_path) as f:
+                    feature_cols = json.load(f)["features"]
+    except Exception as e:
+        print(f"   ⚠️  Could not load Random Forest model: {e}")
+
+    if not models:
+        raise RuntimeError(
+            "❌ No models could be loaded from Hopsworks. "
+            "Please run the training pipeline first."
+        )
+
+    if feature_cols is None:
+        raise RuntimeError("❌ Could not load feature column list from any model.")
+
+    print(f"   ✓ {len(models)} model(s) ready | {len(feature_cols)} features")
+
+    return models, feature_cols, best_model, fs, project
 
 def get_recent_historical_data(fs, hours=72):
     """
@@ -171,65 +219,68 @@ def get_recent_historical_data(fs, hours=72):
     
     return df
 
-def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
+def generate_recursive_forecast(models, feature_cols, df_weather, df_historical):
     """
-    Generate 72-hour recursive forecast
-    
+    Generate 72-hour recursive forecast using one or more models.
+
+    When multiple models are provided, each model predicts independently and
+    the final PM2.5 forecast is the average of all predictions (ensemble).
+
     Recursive Forecasting:
     - Hour 1: Uses actual historical lag features
-    - Hour 2: Uses Hour 1 prediction for lag_1h, actual data for older lags
-    - Hour 3: Uses Hour 2 prediction for lag_1h, Hour 1 for lag_2h, etc.
-    
-    This propagates predictions forward in time.
+    - Hour 2: Uses Hour 1 ensemble prediction for lag_1h, actual data for older lags
+    - Hour 3: Uses Hour 2 ensemble prediction, Hour 1 for lag_2h, etc.
     """
-    print("🔮 Generating 72-hour recursive forecast...")
-    
-    predictions = []
-    
+    print(f"🔮 Generating 72-hour recursive forecast with {len(models)} model(s)...")
+
+    # One predictions list per model
+    model_predictions = {name: [] for name in models}
+
     # Extract historical PM2.5 values for lag features
     historical_pm25 = df_historical['pm2_5'].tolist()
     historical_pm10 = df_historical['pm10'].tolist()
     historical_temp = df_historical['temperature_2m'].tolist()
-    
-    # Track forecast values separately
+
+    pm10_avg = df_historical['pm10'].mean() if len(df_historical) > 0 else DEFAULT_PM10
+
     forecast_temps = []
-    
+    first_model_name = next(iter(models))
+
     for i, row in df_weather.iterrows():
-        # Combine historical + predicted values
-        all_pm25 = historical_pm25 + predictions
-        # Use historical PM10 average consistently to avoid circular dependency
-        # (PM2.5 predictions should not influence PM10 lag features they depend on)
-        pm10_avg = df_historical['pm10'].mean() if len(df_historical) > 0 else DEFAULT_PM10
-        all_pm10 = historical_pm10 + [pm10_avg] * len(predictions)
-        
-        # Temperature: combine historical + forecast values
+        # Ensemble predictions so far (average across models)
+        n_so_far = len(model_predictions[first_model_name])
+        if n_so_far > 0:
+            ensemble_so_far = [
+                np.mean([model_predictions[name][t] for name in models])
+                for t in range(n_so_far)
+            ]
+        else:
+            ensemble_so_far = []
+
+        all_pm25 = historical_pm25 + ensemble_so_far
+        all_pm10 = historical_pm10 + [pm10_avg] * len(ensemble_so_far)
         all_temp = historical_temp + forecast_temps
-        
-        # Build feature dictionary
+
+        # Build feature dictionary (shared across models)
         features = {}
-        
-        # Temporal features
         time = row['time']
         features['hour'] = time.hour
         features['day'] = time.day
         features['month'] = time.month
         features['day_of_week'] = time.dayofweek
         features['is_weekend'] = 1 if time.dayofweek >= 5 else 0
-        
-        # Cyclical encoding
+
         features['hour_sin'] = np.sin(2 * np.pi * features['hour'] / 24)
         features['hour_cos'] = np.cos(2 * np.pi * features['hour'] / 24)
         features['month_sin'] = np.sin(2 * np.pi * features['month'] / 12)
         features['month_cos'] = np.cos(2 * np.pi * features['month'] / 12)
-        
-        # Weather features
+
         features['temperature_2m'] = row['temperature_2m']
         features['relative_humidity_2m'] = row['relative_humidity_2m']
         features['pressure_msl'] = row['pressure_msl']
         features['wind_speed_10m'] = row['wind_speed_10m']
         features['wind_direction_10m'] = row['wind_direction_10m']
-        
-        # Lag features from combined history + predictions
+
         if len(all_pm25) >= 1:
             features['pm2_5_lag_1h'] = all_pm25[-1]
         if len(all_pm25) >= 3:
@@ -242,8 +293,7 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
             features['pm2_5_lag_24h'] = all_pm25[-24]
             features['pm2_5_rolling_mean_24h'] = np.mean(all_pm25[-24:])
             features['pm2_5_rolling_std_24h'] = np.std(all_pm25[-24:])
-        
-        # PM10 lag features
+
         if len(all_pm10) >= 1:
             features['pm10_lag_1h'] = all_pm10[-1]
         if len(all_pm10) >= 3:
@@ -254,8 +304,7 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
             features['pm10_lag_12h'] = all_pm10[-12]
         if len(all_pm10) >= 24:
             features['pm10_lag_24h'] = all_pm10[-24]
-        
-        # Temperature lag features
+
         if len(all_temp) >= 1:
             features['temp_lag_1h'] = all_temp[-1]
         if len(all_temp) >= 3:
@@ -266,74 +315,84 @@ def generate_recursive_forecast(model, feature_cols, df_weather, df_historical):
             features['temp_lag_12h'] = all_temp[-12]
         if len(all_temp) >= 24:
             features['temp_lag_24h'] = all_temp[-24]
-        
-        # Interaction features
+
         recent_pm25 = all_pm25[-1] if all_pm25 else DEFAULT_PM25
         recent_pm10 = all_pm10[-1] if all_pm10 else DEFAULT_PM10
-        
+
         features['pm_ratio'] = recent_pm10 / (recent_pm25 + 1e-3)
         features['temp_humid_interaction'] = row['temperature_2m'] * row['relative_humidity_2m']
         features['wind_pollution_interaction'] = row['wind_speed_10m'] * recent_pm25
-        
-        # Pollutant features (use historical averages, not predictions to avoid circular dependency)
-        # PM10 comes from historical average to avoid circular logic with PM2.5 prediction
-        features['pm10'] = df_historical['pm10'].mean() if len(df_historical) > 0 else DEFAULT_PM10
+
+        features['pm10'] = pm10_avg
         features['co'] = df_historical['co'].mean() if 'co' in df_historical.columns else DEFAULT_CO
         features['no2'] = df_historical['no2'].mean() if 'no2' in df_historical.columns else DEFAULT_NO2
         features['so2'] = df_historical['so2'].mean() if 'so2' in df_historical.columns else DEFAULT_SO2
         features['o3'] = df_historical['o3'].mean() if 'o3' in df_historical.columns else DEFAULT_O3
-        
-        # Fill any missing features with 0
+
         for col in feature_cols:
             if col not in features:
                 features[col] = 0
-        
-        # Create feature vector in correct order
+
         X = pd.DataFrame([features])[feature_cols]
-        
-        # Predict PM2.5
-        pm25_pred = model.predict(X)[0]
-        pm25_pred = max(0, pm25_pred)  # Ensure non-negative
-        
-        predictions.append(pm25_pred)
-        
-        # Store forecast temperature for next iteration
+
+        # Predict with each model independently
+        for name, model in models.items():
+            pm25_pred = float(model.predict(X)[0])
+            pm25_pred = max(0.0, pm25_pred)
+            model_predictions[name].append(pm25_pred)
+
         forecast_temps.append(row['temperature_2m'])
-        
-        # Progress indicator
-        if (i + 1) % 24 == 0:
-            print(f"   ✓ Generated {i + 1}/72 hour predictions")
-    
-    # Create forecast DataFrame
-    df_forecast = df_weather[['time']].copy()
-    df_forecast['pm2_5_forecast'] = predictions
+
+        step = i + 1
+        if step % 24 == 0:
+            print(f"   ✓ Generated {step}/72 hour predictions")
+
+    # Build forecast DataFrame with per-model columns + ensemble
+    df_forecast = df_weather[['time']].copy().reset_index(drop=True)
+
+    for name, preds in model_predictions.items():
+        col = f"pm2_5_{name}"
+        df_forecast[col] = preds
+        df_forecast[f"aqi_{name}"] = df_forecast[col].apply(pm25_to_aqi)
+
+    # Ensemble: average of all models
+    pm25_cols = [f"pm2_5_{n}" for n in models]
+    df_forecast['pm2_5_forecast'] = df_forecast[pm25_cols].mean(axis=1)
     df_forecast['aqi_forecast'] = df_forecast['pm2_5_forecast'].apply(pm25_to_aqi)
-    
-    # Add category and emoji
+
     df_forecast[['aqi_category', 'emoji']] = df_forecast['aqi_forecast'].apply(
         lambda x: pd.Series(get_aqi_category(x))
     )
-    
+
     print("✅ Forecast generation complete!")
-    
     return df_forecast
 
-def display_forecast_summary(df_forecast):
-    """Display forecast summary statistics"""
-    print("\n📈 FORECAST SUMMARY (Next 72 Hours)")
+def display_forecast_summary(df_forecast, models):
+    """Display forecast summary statistics including per-model and ensemble results."""
+    print("\n📈 FORECAST SUMMARY (Next 72 Hours – 3-Day AQI Outlook)")
     print("=" * 60)
-    
-    # Overall statistics
+
+    # Per-model stats
+    model_names = list(models.keys())
+    if len(model_names) > 1:
+        print("\n🔎 Per-Model Comparison (Validation):")
+        for name in model_names:
+            col = f"pm2_5_{name}"
+            if col in df_forecast.columns:
+                avg = df_forecast[col].mean()
+                print(f"   {name:<20} avg PM2.5: {avg:.1f} µg/m³")
+        print(f"   {'ensemble':<20} avg PM2.5: {df_forecast['pm2_5_forecast'].mean():.1f} µg/m³")
+
+    # Overall ensemble statistics
     avg_pm25 = df_forecast['pm2_5_forecast'].mean()
     max_pm25 = df_forecast['pm2_5_forecast'].max()
     min_pm25 = df_forecast['pm2_5_forecast'].min()
-    
     avg_aqi = df_forecast['aqi_forecast'].mean()
     max_aqi = df_forecast['aqi_forecast'].max()
-    
-    print(f"PM2.5 | Average: {avg_pm25:.1f} µg/m³ | Max: {max_pm25:.1f} | Min: {min_pm25:.1f}")
-    print(f"AQI   | Average: {avg_aqi:.0f} | Max: {max_aqi:.0f}")
-    
+
+    print(f"\nEnsemble PM2.5 | Avg: {avg_pm25:.1f} µg/m³ | Max: {max_pm25:.1f} | Min: {min_pm25:.1f}")
+    print(f"Ensemble AQI   | Avg: {avg_aqi:.0f} | Max: {max_aqi:.0f}")
+
     # Category breakdown
     print("\nAQI Category Breakdown:")
     category_counts = df_forecast['aqi_category'].value_counts()
@@ -341,16 +400,23 @@ def display_forecast_summary(df_forecast):
         emoji = df_forecast[df_forecast['aqi_category'] == category]['emoji'].iloc[0]
         percentage = (count / len(df_forecast)) * 100
         print(f"  {emoji} {category}: {count} hours ({percentage:.1f}%)")
-    
-    # Daily breakdown
-    print("\nDaily Average AQI:")
+
+    # 3-day daily summary
+    print("\n🗓️  3-Day Daily AQI Forecast:")
     df_forecast['date'] = df_forecast['time'].dt.date
-    daily_aqi = df_forecast.groupby('date')['aqi_forecast'].mean()
-    for date, aqi in daily_aqi.items():
-        category, emoji = get_aqi_category(aqi)
-        print(f"  {date}: {aqi:.0f} {emoji} ({category})")
-    
-    # Show first 24 hours
+    daily = df_forecast.groupby('date').agg(
+        avg_aqi=('aqi_forecast', 'mean'),
+        max_aqi=('aqi_forecast', 'max'),
+        avg_pm25=('pm2_5_forecast', 'mean'),
+    )
+    for date, row in daily.iterrows():
+        category, emoji = get_aqi_category(row['avg_aqi'])
+        print(
+            f"  {date}  AQI avg: {row['avg_aqi']:.0f} (max {row['max_aqi']:.0f}) "
+            f"| PM2.5 avg: {row['avg_pm25']:.1f} µg/m³  {emoji} {category}"
+        )
+
+    # Hourly breakdown for first 24 hours
     print("\n🕐 Next 24 Hours (Hourly):")
     for _, row in df_forecast.head(24).iterrows():
         time_str = row['time'].strftime('%Y-%m-%d %H:%M')
@@ -387,25 +453,25 @@ def main():
     print("=" * 60)
     print("🌫️  PM2.5 & AQI FORECASTING - INFERENCE PIPELINE")
     print("=" * 60)
-    
-    # Step 1: Load model and features
-    model, feature_cols, fs, project = load_model_and_features()
-    
+
+    # Step 1: Load models and features
+    models, feature_cols, best_model, fs, project = load_model_and_features()
+
     # Step 2: Get historical data for lag features
     df_historical = get_recent_historical_data(fs, hours=72)
-    
+
     # Step 3: Fetch weather forecast
     df_weather = fetch_weather_forecast()
-    
-    # Step 4: Generate forecast
-    df_forecast = generate_recursive_forecast(model, feature_cols, df_weather, df_historical)
-    
+
+    # Step 4: Generate forecast (ensemble of all available models)
+    df_forecast = generate_recursive_forecast(models, feature_cols, df_weather, df_historical)
+
     # Step 5: Display summary
-    display_forecast_summary(df_forecast)
-    
+    display_forecast_summary(df_forecast, models)
+
     # Step 6: Save forecast
     save_forecast(df_forecast, fs, project)
-    
+
     print("\n" + "=" * 60)
     print("✅ INFERENCE PIPELINE COMPLETED SUCCESSFULLY!")
     print("=" * 60)
