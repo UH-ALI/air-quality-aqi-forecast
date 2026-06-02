@@ -10,4 +10,5 @@ shap
 matplotlib
 plotly
 hopsworks[python]>=4.7.0,<4.8.0
+confluent-kafka
 python-dotenv
