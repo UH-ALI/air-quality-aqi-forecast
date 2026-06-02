@@ -9,5 +9,5 @@ streamlit
 shap
 matplotlib
 plotly
-hopsworks[python]==4.7.*
+hopsworks[python]>=4.7.0,<4.8.0
 python-dotenv
