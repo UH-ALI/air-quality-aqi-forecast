@@ -37,4 +37,4 @@ jobs:
           OPENWEATHER_API_KEY: ${{ vars.OPENWEATHER_API_KEY || secrets.OPENWEATHER_API_KEY }}
           POLLUTION_HISTORY_SOURCE: openweather
         run: |
-          python feature_pipeline.py
+          python feature_pipeline.py --days 2

@@ -1,0 +1,33 @@
+name: One-Time Historical Backfill
+
+on:
+  workflow_dispatch:  # Manual trigger only
+    inputs:
+      days:
+        description: 'Number of days to backfill'
+        required: false
+        default: '365'
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run historical backfill
+        env:
+          HOPSWORKS_API_KEY: ${{ vars.HOPSWORKS_API_KEY || secrets.HOPSWORKS_API_KEY }}
+          HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST || secrets.HOPSWORKS_HOST }}
+          HOPSWORKS_PROJECT: ${{ vars.HOPSWORKS_PROJECT || secrets.HOPSWORKS_PROJECT }}
+          OPENWEATHER_API_KEY: ${{ vars.OPENWEATHER_API_KEY || secrets.OPENWEATHER_API_KEY }}
+          POLLUTION_HISTORY_SOURCE: openweather
+        run: python feature_pipeline.py --days ${{ github.event.inputs.days }}
