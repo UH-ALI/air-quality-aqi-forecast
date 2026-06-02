@@ -82,16 +82,15 @@ def save_outputs(raw_df: pd.DataFrame, feature_df: pd.DataFrame) -> None:
 
 
 def publish_to_hopsworks(feature_df: pd.DataFrame) -> None:
-    feature_group = publish_feature_frame(feature_df)
-    if feature_group is None:
-        print("Hopsworks is not configured; kept the local feature artifacts only.")
-        return
-
-    print(
-        f"Published {len(feature_df)} feature rows to Hopsworks feature group "
-        f"{config.HOPSWORKS_FEATURE_GROUP_NAME} v{config.HOPSWORKS_FEATURE_GROUP_VERSION}"
-    )
-
+    try:
+        feature_group = publish_feature_frame(feature_df)
+        if feature_group is None:
+            print("⚠️ Hopsworks not configured — data saved locally only.")
+            return
+        print(f"✅ Published {len(feature_df)} rows to Hopsworks.")
+    except Exception as e:
+        print(f"⚠️ Hopsworks publish failed: {e}")
+        print("✅ Data is saved locally. Fix Hopsworks credentials and re-run publish separately.")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Backfill and build historical AQI features.")
