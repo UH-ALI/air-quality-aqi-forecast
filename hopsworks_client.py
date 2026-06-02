@@ -36,7 +36,7 @@ def get_project():
         login_kwargs["host"] = config.HOPSWORKS_HOST
     if config.HOPSWORKS_PROJECT:
         login_kwargs["project"] = config.HOPSWORKS_PROJECT
-    if config.HOPSWORKS_PORT:
+    if config.HOPSWORKS_PORT and str(config.HOPSWORKS_PORT).isdigit():
         login_kwargs["port"] = config.HOPSWORKS_PORT
 
     return hopsworks.login(**login_kwargs)
