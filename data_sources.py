@@ -8,7 +8,6 @@ from typing import Iterable, Iterator
 
 import pandas as pd
 import requests
-
 import config
 
 

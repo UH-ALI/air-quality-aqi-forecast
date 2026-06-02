@@ -36,5 +36,6 @@ jobs:
           HOPSWORKS_PORT: ${{ vars.HOPSWORKS_PORT || secrets.HOPSWORKS_PORT }}
           OPENWEATHER_API_KEY: ${{ vars.OPENWEATHER_API_KEY || secrets.OPENWEATHER_API_KEY }}
           POLLUTION_HISTORY_SOURCE: openweather
+          HOPSWORKS_ENABLED: "false"
         run: |
           python feature_pipeline.py
