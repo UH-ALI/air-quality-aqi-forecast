@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import time
 from typing import Iterable, Iterator
 
 import pandas as pd
@@ -34,16 +35,27 @@ POLLUTION_COLUMNS = (
 )
 
 
-def _request_json(url: str, params: dict) -> dict:
-    response = requests.get(url, params=params, timeout=120)
-    response.raise_for_status()
-    payload = response.json()
+def _request_json(url: str, params: dict, retries: int = 3, backoff_factor: int = 5) -> dict:
+    """Make a GET request to a URL and return the JSON response, with retries."""
+    for i in range(retries):
+        try:
+            response = requests.get(url, params=params, timeout=120)
+            response.raise_for_status()
+            payload = response.json()
 
-    if isinstance(payload, dict) and payload.get("error"):
-        reason = payload.get("reason", "Unknown API error")
-        raise RuntimeError(f"API request failed: {reason}")
+            if isinstance(payload, dict) and payload.get("error"):
+                reason = payload.get("reason", "Unknown API error")
+                raise RuntimeError(f"API request failed: {reason}")
 
-    return payload
+            return payload
+        except (requests.exceptions.RequestException, RuntimeError) as e:
+            if i == retries - 1:
+                raise  # Re-raise the last exception if all retries fail
+
+            print(f"⚠️ Request failed (attempt {i + 1}/{retries}): {e}. Retrying in {backoff_factor}s...")
+            time.sleep(backoff_factor)
+
+    raise RuntimeError("Request failed after multiple retries")
 
 
 def _chunk_range(start: dt.datetime, end: dt.datetime, chunk_days: int) -> Iterator[tuple[dt.datetime, dt.datetime]]:
