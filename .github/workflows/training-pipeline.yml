@@ -31,5 +31,6 @@ jobs:
           HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST || secrets.HOPSWORKS_HOST }}
           HOPSWORKS_PROJECT: ${{ vars.HOPSWORKS_PROJECT || secrets.HOPSWORKS_PROJECT }}
           HOPSWORKS_PORT: ${{ vars.HOPSWORKS_PORT || secrets.HOPSWORKS_PORT || '443' }}
+          
         run: |
           python training_pipeline.py
