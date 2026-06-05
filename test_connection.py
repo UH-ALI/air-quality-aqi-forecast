@@ -1,6 +1,10 @@
 import os
+import sys
 import requests
 from dotenv import load_dotenv
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 # Load your local .env file
 load_dotenv()

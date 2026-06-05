@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 import joblib
 import numpy as np
@@ -73,12 +77,15 @@ def fetch_weather_forecast():
 
 
 def load_model_and_features():
-    registry_model, metadata = download_latest_model_from_hopsworks()
+    print("📡 Authenticating with Hopsworks and downloading the latest model...")
+    try:
+        registry_model, metadata = download_latest_model_from_hopsworks()
+    except Exception as exc:
+        print(f"⚠️ Hopsworks model registry connection/download failed: {exc}")
+        registry_model, metadata = None, None
+
     if registry_model is not None:
         feature_cols = metadata.get("feature_cols", []) if metadata else []
-        if not feature_cols and config.MODEL_BUNDLE_PATH.exists():
-            bundle = joblib.load(config.MODEL_BUNDLE_PATH)
-            feature_cols = bundle["feature_cols"]
         if not feature_cols:
             raise RuntimeError(
                 "Hopsworks model download succeeded, but feature-column metadata is missing. "
@@ -89,21 +96,35 @@ def load_model_and_features():
         print(f"   Feature count: {len(feature_cols)}")
         return registry_model, feature_cols
 
-    if not config.MODEL_BUNDLE_PATH.exists():
-        raise FileNotFoundError(
-            f"Missing model bundle at {config.MODEL_BUNDLE_PATH}. Run training_pipeline.py first."
-        )
+    print("⚠️ Could not download model from Hopsworks model registry. Checking local fallback...")
+    if config.MODEL_BUNDLE_PATH.exists():
+        bundle = joblib.load(config.MODEL_BUNDLE_PATH)
+        model_obj = bundle["model"]
+        feature_cols = bundle["feature_cols"]
+        best_model_name = bundle.get("best_model_name", "unknown")
+        print(f"✅ Loaded local model bundle: {best_model_name}")
+        print(f"   Feature count: {len(feature_cols)}")
+        return model_obj, feature_cols
 
-    bundle = joblib.load(config.MODEL_BUNDLE_PATH)
-    model_obj = bundle["model"]
-    feature_cols = bundle["feature_cols"]
-    best_model_name = bundle.get("best_model_name", "unknown")
-    print(f"✅ Loaded local model bundle: {best_model_name}")
-    print(f"   Feature count: {len(feature_cols)}")
-    return model_obj, feature_cols
+    raise RuntimeError(
+        "Model loading failed: Hopsworks Model Registry is unavailable (or empty), "
+        f"and no local model bundle was found at {config.MODEL_BUNDLE_PATH}."
+    )
 
 
 def get_recent_historical_data(hours: int = config.FORECAST_HORIZON_HOURS):
+    # Try to download from Hopsworks feature group first
+    try:
+        from hopsworks_client import download_recent_historical_data_from_hopsworks
+        df = download_recent_historical_data_from_hopsworks(hours)
+        if df is not None and not df.empty:
+            print(f"✅ Loaded {len(df)} historical records from Hopsworks Feature Group")
+            print(f"   Time range: {df['time'].min()} to {df['time'].max()}")
+            return df
+    except Exception as exc:
+        print(f"⚠️ Hopsworks historical data download failed: {exc}. Trying local fallback...")
+
+    # Local fallback
     if not config.RAW_HISTORY_PATH.exists():
         raise FileNotFoundError(
             f"Missing raw history at {config.RAW_HISTORY_PATH}. Run feature_pipeline.py first."
@@ -114,7 +135,7 @@ def get_recent_historical_data(hours: int = config.FORECAST_HORIZON_HOURS):
     df = df.sort_values("time").drop_duplicates("time").reset_index(drop=True)
     df = df.tail(hours)
 
-    print(f"✅ Loaded {len(df)} historical records")
+    print(f"✅ Loaded {len(df)} historical records from local path")
     print(f"   Time range: {df['time'].min()} to {df['time'].max()}")
     return df
 

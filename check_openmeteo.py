@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 import pandas as pd
 import requests

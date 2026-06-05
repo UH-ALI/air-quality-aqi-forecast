@@ -30,6 +30,7 @@ jobs:
           HOPSWORKS_API_KEY: ${{ vars.HOPSWORKS_API_KEY || secrets.HOPSWORKS_API_KEY }}
           HOPSWORKS_HOST: ${{ vars.HOPSWORKS_HOST || secrets.HOPSWORKS_HOST }}
           HOPSWORKS_PROJECT: ${{ vars.HOPSWORKS_PROJECT || secrets.HOPSWORKS_PROJECT }}
+          HOPSWORKS_PORT: ${{ vars.HOPSWORKS_PORT || secrets.HOPSWORKS_PORT }}
 
         run: |
           python inference_pipeline.py

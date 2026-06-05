@@ -47,29 +47,38 @@ def _load_local_env_file(env_path: Path) -> None:
 
 _load_local_env_file(WORKSPACE_ROOT / ".env")
 
+def _get_env_int(key: str, default: int) -> int:
+	val = os.getenv(key, "").strip()
+	if not val:
+		return default
+	try:
+		return int(val)
+	except ValueError:
+		return default
+
+
 # Geographic coordinates for the location of interest.
 CITY_NAME = "Delhi"
 LATITUDE = 28.6139
 LONGITUDE = 77.2090
 
 # Data sources and backfill settings.
-HISTORICAL_BACKFILL_DAYS = int(os.getenv("HISTORICAL_BACKFILL_DAYS", "365"))
-HISTORICAL_CHUNK_DAYS = int(os.getenv("HISTORICAL_CHUNK_DAYS", "15"))
+HISTORICAL_BACKFILL_DAYS = _get_env_int("HISTORICAL_BACKFILL_DAYS", 365)
+HISTORICAL_CHUNK_DAYS = _get_env_int("HISTORICAL_CHUNK_DAYS", 15)
 POLLUTION_HISTORY_SOURCE = os.getenv("POLLUTION_HISTORY_SOURCE", "openweather").lower()
 OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "").strip()
-OPENMETEO_POLLUTION_LOOKBACK_DAYS = int(os.getenv("OPENMETEO_POLLUTION_LOOKBACK_DAYS", "92"))
+OPENMETEO_POLLUTION_LOOKBACK_DAYS = _get_env_int("OPENMETEO_POLLUTION_LOOKBACK_DAYS", 92)
 
 # Hopsworks settings.
 HOPSWORKS_ENABLED = os.getenv("HOPSWORKS_ENABLED", "true").strip().lower() not in {"0", "false", "no"}
 HOPSWORKS_API_KEY = os.getenv("HOPSWORKS_API_KEY", "").strip()
 HOPSWORKS_HOST = os.getenv("HOPSWORKS_HOST", "").strip()
 HOPSWORKS_PROJECT = os.getenv("HOPSWORKS_PROJECT", "predicting_aqi").strip()
-_port_str = os.getenv("HOPSWORKS_PORT", "443").strip()
-HOPSWORKS_PORT = int(_port_str) if _port_str else 443
+HOPSWORKS_PORT = _get_env_int("HOPSWORKS_PORT", 443)
 HOPSWORKS_FEATURE_GROUP_NAME = os.getenv("HOPSWORKS_FEATURE_GROUP_NAME", "delhi_aqi_features")
-HOPSWORKS_FEATURE_GROUP_VERSION = int(os.getenv("HOPSWORKS_FEATURE_GROUP_VERSION", "1"))
+HOPSWORKS_FEATURE_GROUP_VERSION = _get_env_int("HOPSWORKS_FEATURE_GROUP_VERSION", 1)
 HOPSWORKS_FEATURE_VIEW_NAME = os.getenv("HOPSWORKS_FEATURE_VIEW_NAME", "delhi_aqi_feature_view")
-HOPSWORKS_FEATURE_VIEW_VERSION = int(os.getenv("HOPSWORKS_FEATURE_VIEW_VERSION", "1"))
+HOPSWORKS_FEATURE_VIEW_VERSION = _get_env_int("HOPSWORKS_FEATURE_VIEW_VERSION", 1)
 HOPSWORKS_MODEL_NAME = os.getenv("HOPSWORKS_MODEL_NAME", "delhi_aqi_model")
 
 # Feature engineering settings.
@@ -78,7 +87,7 @@ FEATURE_LAGS = (1, 3, 6, 12, 24, 48, 72)
 ROLLING_WINDOWS = (24, 48, 72)
 
 # Forecast settings.
-FORECAST_HORIZON_HOURS = int(os.getenv("FORECAST_HORIZON_HOURS", "72"))
+FORECAST_HORIZON_HOURS = _get_env_int("FORECAST_HORIZON_HOURS", 72)
 
 # File paths.
 RAW_HISTORY_PATH = DATA_DIR / "historical_raw.parquet"

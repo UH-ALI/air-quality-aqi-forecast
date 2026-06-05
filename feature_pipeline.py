@@ -5,6 +5,10 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 from pathlib import Path
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 import numpy as np
 import pandas as pd

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import tempfile
+import sys
 from functools import lru_cache
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 import joblib
 import pandas as pd
@@ -31,14 +35,20 @@ def get_project():
     if not is_enabled():
         return None
 
+    host = config.HOPSWORKS_HOST
+    if host == "app.hopsworks.ai":
+        print("ℹ️ Auto-correcting Hopsworks host from 'app.hopsworks.ai' to 'c.app.hopsworks.ai' for SDK compatibility.")
+        host = "c.app.hopsworks.ai"
+
     login_kwargs = {"api_key_value": config.HOPSWORKS_API_KEY}
-    if config.HOPSWORKS_HOST:
-        login_kwargs["host"] = config.HOPSWORKS_HOST
+    if host:
+        login_kwargs["host"] = host
     if config.HOPSWORKS_PROJECT:
         login_kwargs["project"] = config.HOPSWORKS_PROJECT
     if config.HOPSWORKS_PORT:
         login_kwargs["port"] = config.HOPSWORKS_PORT
 
+    print(f"📡 Logging in to Hopsworks project '{config.HOPSWORKS_PROJECT}' on host '{host or 'c.app.hopsworks.ai'}'...")
     return hopsworks.login(**login_kwargs)
 
 
@@ -167,3 +177,26 @@ def download_latest_model_from_hopsworks():
     metadata_path = model_dir / "metadata.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
     return joblib.load(model_path), metadata
+
+
+def download_recent_historical_data_from_hopsworks(hours: int = 72) -> pd.DataFrame | None:
+    """Download the most recent historical records from the Hopsworks Feature Group."""
+    if not is_enabled():
+        return None
+
+    try:
+        feature_store = get_feature_store()
+        if feature_store is None:
+            return None
+
+        feature_group = get_or_create_feature_group(feature_store)
+        df = feature_group.read()
+        if df is None or df.empty:
+            return None
+
+        df["time"] = pd.to_datetime(df["time"], utc=True)
+        df = df.sort_values("time").drop_duplicates("time").reset_index(drop=True)
+        return df.tail(hours)
+    except Exception as exc:
+        print(f"⚠️ Failed to download recent historical data from Hopsworks: {exc}")
+        return None
