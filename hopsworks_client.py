@@ -122,40 +122,14 @@ def load_training_frame_from_hopsworks() -> pd.DataFrame | None:
         if feature_store is None:
             return None
 
-        feature_view = get_or_create_feature_view(feature_store)
+        print("ℹ️ Reading training data directly from Feature Group...")
+        feature_group = get_or_create_feature_group(feature_store)
+        combined = feature_group.read()
         
-        try:
-            print("ℹ️ Attempting to retrieve training data version 1...")
-            features, labels = feature_view.get_training_data(1)
-        except Exception:
-            print("ℹ️ Version 1 not found or error. Creating new training data...")
-            try:
-                features, labels = feature_view.create_training_data(description="Delhi AQI training dataset")
-            except Exception as create_exc:
-                print(f"⚠️ create_training_data failed: {create_exc}. Falling back to reading feature group directly...")
-                feature_group = get_or_create_feature_group(feature_store)
-                combined = feature_group.read()
-                if combined is None or combined.empty:
-                    return None
-                combined["time"] = pd.to_datetime(combined["time"], utc=True)
-                return combined.sort_values("time").drop_duplicates("time").reset_index(drop=True)
-
-        if labels is None:
+        if combined is None or combined.empty:
             return None
-
-        if isinstance(labels, pd.Series):
-            labels_frame = labels.to_frame(name=config.TARGET_COLUMN)
-        else:
-            labels_frame = pd.DataFrame(labels).reset_index(drop=True)
-            if config.TARGET_COLUMN not in labels_frame.columns and len(labels_frame.columns) == 1:
-                labels_frame = labels_frame.rename(columns={labels_frame.columns[0]: config.TARGET_COLUMN})
-
-        combined = pd.concat([features.reset_index(drop=True), labels_frame.reset_index(drop=True)], axis=1)
-        if "time" not in combined.columns:
-            return None
-
+            
         combined["time"] = pd.to_datetime(combined["time"], utc=True)
-
         return combined.sort_values("time").drop_duplicates("time").reset_index(drop=True)
     except Exception as exc:
         print(f"⚠️ Failed to load training frame from Hopsworks: {exc}")
