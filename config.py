@@ -47,6 +47,11 @@ def _load_local_env_file(env_path: Path) -> None:
 
 _load_local_env_file(WORKSPACE_ROOT / ".env")
 
+# Clean up empty environment variables so Hopsworks SDK doesn't read empty string values and crash.
+for _var in ["HOPSWORKS_PORT", "HOPSWORKS_HOST", "HOPSWORKS_PROJECT", "HOPSWORKS_API_KEY"]:
+	if _var in os.environ and not os.environ[_var].strip():
+		del os.environ[_var]
+
 def _get_env_int(key: str, default: int) -> int:
 	val = os.getenv(key, "").strip()
 	if not val:
