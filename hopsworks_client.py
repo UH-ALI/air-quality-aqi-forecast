@@ -223,3 +223,49 @@ def download_recent_historical_data_from_hopsworks(hours: int = 72) -> pd.DataFr
     except Exception as exc:
         print(f"⚠️ Failed to download recent historical data from Hopsworks: {exc}")
         return None
+
+
+def get_or_create_forecast_feature_group(feature_store):
+    return feature_store.get_or_create_feature_group(
+        name="delhi_aqi_forecast",
+        version=1,
+        primary_key=["time"],
+        event_time="time",
+        description="Delhi AQI 72-hour forecast.",
+    )
+
+
+def publish_forecast_to_hopsworks(forecast_df: pd.DataFrame):
+    feature_store = get_feature_store()
+    if feature_store is None:
+        return None
+
+    try:
+        feature_group = get_or_create_forecast_feature_group(feature_store)
+        feature_group.insert(forecast_df, write_options={"wait_for_job": True})
+        print(f"✅ Published {len(forecast_df)} forecast rows to Hopsworks.")
+        return feature_group
+    except Exception as e:
+        print(f"⚠️ Failed to publish forecast to Hopsworks: {e}")
+        return None
+
+
+def download_latest_forecast_from_hopsworks() -> pd.DataFrame | None:
+    if not is_enabled():
+        return None
+
+    try:
+        feature_store = get_feature_store()
+        if feature_store is None:
+            return None
+
+        feature_group = get_or_create_forecast_feature_group(feature_store)
+        df = feature_group.read()
+        if df is None or df.empty:
+            return None
+
+        df["time"] = pd.to_datetime(df["time"], utc=True)
+        return df.sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    except Exception as exc:
+        print(f"⚠️ Failed to download forecast from Hopsworks: {exc}")
+        return None

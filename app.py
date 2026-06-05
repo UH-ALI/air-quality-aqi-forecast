@@ -8,6 +8,8 @@ import streamlit as st
 
 import config
 
+from hopsworks_client import download_latest_forecast_from_hopsworks
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Delhi AQI Forecast",
@@ -20,11 +22,22 @@ comparison_path = config.MODEL_COMPARISON_PATH
 shap_path = config.SHAP_PLOT_PATH
 
 # --- Load Data ---
-try:
-    df_forecast = pd.read_csv(forecast_path)
-    df_forecast["time"] = pd.to_datetime(df_forecast["time"])
-except FileNotFoundError:
-    st.error(f"{forecast_path} not found. Please run the inference pipeline first.")
+@st.cache_data(ttl=3600)
+def load_forecast_data():
+    df = download_latest_forecast_from_hopsworks()
+    if df is not None and not df.empty:
+        return df
+
+    try:
+        df = pd.read_csv(forecast_path)
+        df["time"] = pd.to_datetime(df["time"])
+        return df
+    except FileNotFoundError:
+        return None
+
+df_forecast = load_forecast_data()
+if df_forecast is None:
+    st.error("Forecast data not found in Hopsworks or locally. Please run the inference pipeline first.")
     st.stop()
 
 # --- Header ---

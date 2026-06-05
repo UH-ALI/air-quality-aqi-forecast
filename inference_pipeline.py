@@ -271,6 +271,10 @@ def save_forecast(df_forecast):
     config.FORECAST_OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     df_forecast.to_csv(config.FORECAST_OUTPUT_PATH, index=False)
     print(f"   ✓ Saved to {config.FORECAST_OUTPUT_PATH}")
+
+    from hopsworks_client import publish_forecast_to_hopsworks
+    publish_forecast_to_hopsworks(df_forecast)
+
     print("✅ Forecast saved successfully!")
 
 
