@@ -117,61 +117,93 @@ def publish_feature_frame(feature_frame: pd.DataFrame):
 
 
 def load_training_frame_from_hopsworks() -> pd.DataFrame | None:
-    feature_store = get_feature_store()
-    if feature_store is None:
+    try:
+        feature_store = get_feature_store()
+        if feature_store is None:
+            return None
+
+        feature_view = get_or_create_feature_view(feature_store)
+        
+        try:
+            print("ℹ️ Attempting to retrieve training data version 1...")
+            features, labels = feature_view.get_training_data(1)
+        except Exception:
+            print("ℹ️ Version 1 not found or error. Creating new training data...")
+            try:
+                features, labels = feature_view.create_training_data(description="Delhi AQI training dataset")
+            except Exception as create_exc:
+                print(f"⚠️ create_training_data failed: {create_exc}. Falling back to reading feature group directly...")
+                feature_group = get_or_create_feature_group(feature_store)
+                combined = feature_group.read()
+                if combined is None or combined.empty:
+                    return None
+                combined["time"] = pd.to_datetime(combined["time"], utc=True)
+                return combined.sort_values("time").drop_duplicates("time").reset_index(drop=True)
+
+        if labels is None:
+            return None
+
+        if isinstance(labels, pd.Series):
+            labels_frame = labels.to_frame(name=config.TARGET_COLUMN)
+        else:
+            labels_frame = pd.DataFrame(labels).reset_index(drop=True)
+            if config.TARGET_COLUMN not in labels_frame.columns and len(labels_frame.columns) == 1:
+                labels_frame = labels_frame.rename(columns={labels_frame.columns[0]: config.TARGET_COLUMN})
+
+        combined = pd.concat([features.reset_index(drop=True), labels_frame.reset_index(drop=True)], axis=1)
+        if "time" not in combined.columns:
+            return None
+
+        combined["time"] = pd.to_datetime(combined["time"], utc=True)
+
+        return combined.sort_values("time").drop_duplicates("time").reset_index(drop=True)
+    except Exception as exc:
+        print(f"⚠️ Failed to load training frame from Hopsworks: {exc}")
         return None
-
-    feature_view = get_or_create_feature_view(feature_store)
-    features, labels = feature_view.create_training_data()
-
-    if labels is None:
-        return None
-
-    if isinstance(labels, pd.Series):
-        labels_frame = labels.to_frame(name=config.TARGET_COLUMN)
-    else:
-        labels_frame = pd.DataFrame(labels).reset_index(drop=True)
-        if config.TARGET_COLUMN not in labels_frame.columns and len(labels_frame.columns) == 1:
-            labels_frame = labels_frame.rename(columns={labels_frame.columns[0]: config.TARGET_COLUMN})
-
-    combined = pd.concat([features.reset_index(drop=True), labels_frame.reset_index(drop=True)], axis=1)
-    if "time" not in combined.columns:
-        return None
-
-    combined["time"] = pd.to_datetime(combined["time"], utc=True)
-
-    return combined.sort_values("time").drop_duplicates("time").reset_index(drop=True)
 
 
 def register_model_with_hopsworks(model, metrics: dict, best_model_name: str, feature_cols: list[str]):
-    model_registry = get_model_registry()
-    if model_registry is None:
-        return None
+    try:
+        model_registry = get_model_registry()
+        if model_registry is None:
+            return None
 
-    feature_store = get_feature_store()
-    feature_view = get_or_create_feature_view(feature_store) if feature_store is not None else None
+        feature_store = get_feature_store()
+        try:
+            feature_view = get_or_create_feature_view(feature_store) if feature_store is not None else None
+        except Exception as e:
+            print(f"⚠️ Could not load feature view for model registration: {e}")
+            feature_view = None
 
-    registry_model = model_registry.sklearn.create_model(
-        name=config.HOPSWORKS_MODEL_NAME,
-        metrics=metrics,
-        description=f"Champion AQI model: {best_model_name}",
-        feature_view=feature_view,
-        training_dataset_version=1,
-    )
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        artifact_dir = Path(tmp_dir) / "model"
-        artifact_dir.mkdir(parents=True, exist_ok=True)
-        joblib.dump(model, artifact_dir / "model.pkl")
-        metadata = {
-            "best_model_name": best_model_name,
+        create_kwargs = {
+            "name": config.HOPSWORKS_MODEL_NAME,
             "metrics": metrics,
-            "feature_cols": feature_cols,
+            "description": f"Champion AQI model: {best_model_name}",
         }
-        (artifact_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-        registry_model.save(str(artifact_dir))
+        
+        # Only attach feature_view if it exists to avoid validation errors
+        if feature_view is not None:
+            create_kwargs["input_example"] = None # Avoid versioning issues
+            create_kwargs["feature_view"] = feature_view
 
-    return registry_model
+        registry_model = model_registry.sklearn.create_model(**create_kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            artifact_dir = Path(tmp_dir) / "model"
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            joblib.dump(model, artifact_dir / "model.pkl")
+            metadata = {
+                "best_model_name": best_model_name,
+                "metrics": metrics,
+                "feature_cols": feature_cols,
+            }
+            (artifact_dir / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+            registry_model.save(str(artifact_dir))
+
+        return registry_model
+    except Exception as exc:
+        print(f"⚠️ Failed to register model with Hopsworks: {exc}")
+        return None
 
 
 def download_latest_model_from_hopsworks():
