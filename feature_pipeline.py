@@ -121,6 +121,14 @@ def main() -> None:
     print(f"Feature rows after lag drop: {len(feature_df)}")
     print(f"Feature columns: {len(feature_df.columns)}")
 
+    if feature_df.empty:
+        raise ValueError(
+            "Engineered features dataframe is empty! This happens when the '--days' parameter "
+            f"({args.days} days) is less than or too close to the lookback window required by the "
+            f"lag features (maximum lag: {max(config.FEATURE_LAGS)} hours, or 3 days). "
+            "Please run with '--days 5' or higher to generate populated feature rows."
+        )
+
     save_outputs(raw_df, feature_df)
     publish_to_hopsworks(feature_df)
 
