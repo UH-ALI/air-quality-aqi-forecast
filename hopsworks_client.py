@@ -73,13 +73,21 @@ def get_or_create_feature_group(feature_store):
 
 
 def get_or_create_feature_view(feature_store):
+    fv = None
     try:
-        return feature_store.get_feature_view(
+        fv = feature_store.get_feature_view(
             name=config.HOPSWORKS_FEATURE_VIEW_NAME,
             version=config.HOPSWORKS_FEATURE_VIEW_VERSION,
         )
-    except Exception:
-        feature_group = get_or_create_feature_group(feature_store)
+    except Exception as e:
+        print(f"ℹ️ Feature view lookup exception: {e}. Will attempt to create one.")
+
+    if fv is not None:
+        return fv
+
+    print("ℹ️ Feature view does not exist. Creating new feature view...")
+    feature_group = get_or_create_feature_group(feature_store)
+    try:
         return feature_store.create_feature_view(
             name=config.HOPSWORKS_FEATURE_VIEW_NAME,
             version=config.HOPSWORKS_FEATURE_VIEW_VERSION,
@@ -87,6 +95,15 @@ def get_or_create_feature_view(feature_store):
             labels=[config.TARGET_COLUMN],
             description="Delhi AQI training view.",
         )
+    except Exception as create_exc:
+        print(f"⚠️ Failed to create feature view: {create_exc}. Checking fallback lookup...")
+        try:
+            return feature_store.get_feature_view(
+                name=config.HOPSWORKS_FEATURE_VIEW_NAME,
+                version=config.HOPSWORKS_FEATURE_VIEW_VERSION,
+            )
+        except Exception:
+            raise create_exc
 
 
 def publish_feature_frame(feature_frame: pd.DataFrame):
