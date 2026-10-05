@@ -1,172 +1,175 @@
-# Air Quality AQI Forecast
+# AQI Forecast
 
-AQI forecasting system for Delhi, India with Hopsworks as the feature store and model registry.
-The pipelines still keep local Parquet/joblib fallbacks for development and validation, but the primary runtime path now publishes features to Hopsworks and registers the champion model there.
+**72-hour hourly PM2.5 and US-EPA AQI forecasts for Delhi, with feature, training and inference pipelines that run on a schedule without manual steps.**
 
-## What it does
+Built during the 10Pearls Data Science internship (2026). Hopsworks serves as the feature store and model registry, GitHub Actions as the scheduler, and Streamlit as the dashboard. Every pipeline falls back to local Parquet/joblib files when Hopsworks isn't configured, so the project runs offline too.
 
-- Backfills one year of hourly weather history from Open-Meteo.
-- Uses OpenWeather air pollution history for the one-year pollution backfill when `OPENWEATHER_API_KEY` is set.
-- Falls back to the recent Open-Meteo air-quality window when OpenWeather is unavailable.
-- Engineers lag, rolling, cyclical, and interaction features.
-- Publishes the engineered feature frame to a Hopsworks feature group.
-- Materializes training data from a Hopsworks feature view and compares multiple models.
-- Registers the champion model in the Hopsworks model registry.
-- Downloads the latest registered model for 72-hour forecast generation.
+---
 
-## Repository Layout
+## Results
 
+<!-- RESULTS: run `python evaluate_backtest.py` and paste the table it prints here, plus the period line. -->
+
+**How this is measured:** a rolling-origin backtest that mirrors production (`evaluate_backtest.py`).
+- Models are trained on the first 80% of the history.
+- Across the held-out 20%, a 72-hour forecast is started every 24 hours with the same recursive forecaster the inference pipeline uses, and each hour is compared with the observed PM2.5.
+- Two naive baselines are scored the same way: the last observed hour held flat, and the last 24 hours repeated.
+
+**Caveat:** observed weather stands in for the weather forecast, so these errors are a lower bound; in production, weather-forecast error adds to them.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Sources
+        OM[Open-Meteo<br/>weather archive + forecast]
+        OW[OpenWeather<br/>air-pollution history]
+    end
+
+    subgraph Hourly["Feature pipeline · hourly"]
+        F1[Fetch last 5 days] --> F2[Engineer features<br/>past-only PM2.5]
+    end
+
+    subgraph Weekly["Training pipeline · weekly"]
+        T1[Read feature view] --> T2[Fit baseline, Ridge,<br/>Random Forest, XGBoost]
+        T2 --> T3[Pick lowest validation RMSE]
+    end
+
+    subgraph SixHourly["Inference pipeline · every 6 h"]
+        I1[Latest model + last 72 h] --> I2[Recursive 72-h forecast<br/>on forecast weather]
+        I2 --> I3[PM2.5 → AQI]
+    end
+
+    OM --> F1
+    OW --> F1
+    F2 --> FG[(Hopsworks<br/>feature group)]
+    FG --> T1
+    T3 --> MR[(Hopsworks<br/>model registry)]
+    MR --> I1
+    FG --> I1
+    OM --> I2
+    I3 --> FC[(Forecast<br/>feature group)] --> UI[Streamlit dashboard]
 ```
-.
-├── app.py                   # Streamlit dashboard
-├── check_openmeteo.py       # Open-Meteo range verification script
-├── config.py                # Centralized paths, Hopsworks names, and settings
-├── data_sources.py          # Historical and forecast data access helpers
-├── feature_pipeline.py      # Historical backfill and feature publishing
-├── hopsworks_client.py      # Hopsworks login, feature store, and registry helpers
-├── inference_pipeline.py    # 72-hour recursive forecast generation
-├── training_pipeline.py     # Model comparison and registry publishing
-├── requirements.txt         # Python dependencies
-├── .github/workflows/       # GitHub Actions automation
-└── README.md
-```
 
-## Setup
+| Pipeline | Schedule | Script | Output |
+|---|---|---|---|
+| Backfill | Manual (`backfill.yml`) | `feature_pipeline.py --days 365` | One year of hourly features |
+| Features | Hourly | `feature_pipeline.py --days 5` | Upserts the latest hours (primary key: `time`) |
+| Training | Weekly, Sunday 00:00 UTC | `training_pipeline.py` | New registry version + comparison report |
+| Inference | Every 6 hours | `inference_pipeline.py` | 72 hourly PM2.5/AQI rows |
 
-### Prerequisites
+---
 
-- Python 3.10 or newer
-- A Hopsworks project, API key, and optional host/project/port overrides
-- OpenWeather API key for the full-year pollution history
+## Data
 
-### Install Dependencies
+| Source | Variables | Window |
+|---|---|---|
+| Open-Meteo archive | Temperature, relative humidity, pressure, wind speed and direction | 1 year, fetched in 15-day chunks |
+| OpenWeather air-pollution history | PM2.5, PM10, CO, NO₂, SO₂, O₃ | 1 year (needs an API key) |
+| Open-Meteo air quality (fallback) | Same pollutants | About 92 days |
+| Open-Meteo forecast | Same weather variables | Next 72 hours |
+
+Target: hourly PM2.5 (µg/m³) at 28.61° N, 77.21° E. AQI is derived from the PM2.5 forecast with the US-EPA breakpoints.
+
+---
+
+## Features
+
+Every model input at hour *t* is something known when the forecast for hour *t* is made: the weather at *t* (from the forecast) and pollution up to *t − 1*.
+
+| Group | Features |
+|---|---|
+| Calendar | Hour, day, month, day of week, weekend flag; sine/cosine of hour and month |
+| Weather at *t* | Temperature, humidity, pressure, wind speed, wind direction |
+| Lags | PM2.5, PM10 and temperature at 1, 3, 6, 12, 24, 48 and 72 hours |
+| Rolling | Mean and standard deviation of PM2.5 over the previous 24, 48 and 72 hours |
+| Interactions | PM10/PM2.5 ratio (previous hour), temperature × humidity, wind speed × previous-hour PM2.5 |
+
+Same-hour pollutant readings (PM10, CO, NO₂, SO₂, O₃) stay in the feature group but are not model inputs, because they are unknown for future hours.
+
+`tests/test_features.py` enforces both rules:
+- Changing PM2.5 at hour *t* must not change any input at hour *t*.
+- The inference pipeline's feature builder must produce the same values as the training feature pipeline.
+
+---
+
+## Models
+
+| Model | Configuration |
+|---|---|
+| Persistence baseline | Previous hour's PM2.5 |
+| Ridge | Standardized inputs, α = 1.0 |
+| Random Forest | 350 trees, min 2 samples per leaf |
+| XGBoost | 500 trees, depth 8, learning rate 0.05, 0.8 row and column subsampling |
+
+The training pipeline splits the history chronologically (80/20, no shuffling) and registers the model with the lowest one-step validation RMSE. It also writes feature importances and a SHAP summary for the XGBoost model.
+
+**Recursive forecasting:** each hour's prediction becomes the lag-1 input for the next hour, so errors compound with horizon. That's why the Results table reports error by horizon instead of a single one-step score.
+
+---
+
+## Design notes
+
+- **Leakage fix (feature group v2).** In the first version, the rolling windows and two interaction features included PM2.5 at the hour being predicted, and same-hour pollutant readings were model inputs. Validation scores looked far better than the model could achieve when forecasting, and at inference those inputs had to be approximated. v2 builds every pollution feature from past hours only, and adds the two tests above. Scores from v1 aren't comparable with v2.
+- **Why recursive instead of one model per horizon:** a single model and a single feature definition keep the training and serving code identical. The cost is compounding error at long horizons, which the backtest measures.
+- **Local fallbacks:** every Hopsworks call degrades to a local file, which made debugging the scheduled jobs possible without the cloud project.
+
+---
+
+## Run locally
+
+Requires Python 3.10+.
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env                       # Hopsworks and OpenWeather keys; both optional
+
+python feature_pipeline.py --days 365      # backfill (needs OPENWEATHER_API_KEY for a full year)
+python training_pipeline.py                # compare models, register the best one
+python evaluate_backtest.py                # 72-hour backtest → evaluation/*.csv
+python inference_pipeline.py               # 72-hour forecast → forecast_72h.csv
+streamlit run app.py                       # dashboard
+python -m pytest                           # leakage and parity tests (no network)
 ```
 
-### Environment Variables
+Without an OpenWeather key, set `POLLUTION_HISTORY_SOURCE=openmeteo` for a backfill of about 92 days. Without Hopsworks credentials, every step reads and writes local files under `data/`, `models/` and `reports/`.
 
-Set these before running the pipelines locally or as GitHub repository variables in GitHub Actions. For local development, you can copy [.env.example](.env.example) to `.env` and fill in the values there:
+### Configuration
 
-```powershell
-$env:HOPSWORKS_API_KEY="your-hopsworks-api-key"
-$env:HOPSWORKS_HOST="your-hopsworks-host"
-$env:HOPSWORKS_PROJECT="your-hopsworks-project"
-$env:HOPSWORKS_PORT="443"
-$env:OPENWEATHER_API_KEY="your-openweather-api-key"
-$env:POLLUTION_HISTORY_SOURCE="openweather"
+| Variable | Purpose |
+|---|---|
+| `HOPSWORKS_API_KEY`, `HOPSWORKS_HOST`, `HOPSWORKS_PROJECT` | Feature store and model registry; leave unset for local mode |
+| `HOPSWORKS_FEATURE_GROUP_VERSION`, `HOPSWORKS_FEATURE_VIEW_VERSION` | Default 2 (past-only features) |
+| `OPENWEATHER_API_KEY` | One-year pollution backfill |
+| `POLLUTION_HISTORY_SOURCE` | `openweather` (default) or `openmeteo` |
+| `FORECAST_HORIZON_HOURS` | Default 72 |
+
+In GitHub Actions, the workflows read these from repository variables first and fall back to secrets.
+
+---
+
+## Project structure
+
+```
+config.py               # location, feature settings, Hopsworks names, paths
+data_sources.py         # Open-Meteo / OpenWeather clients with retry and chunking
+feature_pipeline.py     # backfill + feature engineering + feature-group publish
+training_pipeline.py    # model comparison, SHAP, registry publish
+inference_pipeline.py   # shared feature-row builder + recursive 72-h forecast
+evaluate_backtest.py    # rolling-origin backtest against naive baselines
+hopsworks_client.py     # feature store / registry helpers with local fallbacks
+app.py                  # Streamlit dashboard
+tests/                  # leakage and train/serve parity tests
+.github/workflows/      # backfill, feature, training, inference, tests
 ```
 
-If `OPENWEATHER_API_KEY` is not set, the feature pipeline falls back to the recent Open-Meteo air-quality history window.
-If the Hopsworks variables are missing, the code falls back to local artifacts so the project can still be validated offline.
+---
 
-For local runs, copy [.env.example](.env.example) to [.env](.env) and fill in the values you want to keep on your machine. The code loads `.env` automatically if it exists.
+## Limitations
 
-## Run the Pipeline
-
-1. Verify Open-Meteo coverage:
-
-```bash
-python check_openmeteo.py
-```
-
-2. Build the historical backfill and publish the feature frame:
-
-```bash
-python feature_pipeline.py
-```
-
-3. Train and compare models, then register the champion model:
-
-```bash
-python training_pipeline.py
-```
-
-4. Generate the 72-hour forecast using the latest registry model:
-
-```bash
-python inference_pipeline.py
-```
-
-5. Launch the dashboard:
-
-```bash
-streamlit run app.py
-```
-
-## Outputs
-
-The pipelines keep these local artifacts for convenience and fallback:
-
-- `data/historical_raw.parquet`
-- `data/historical_features.parquet`
-- `forecast_72h.csv`
-- `models/best_model.joblib`
-- `reports/model_comparison.csv`
-- `reports/feature_importance.csv`
-- `reports/shap_summary.png` when SHAP generation is available
-
-## Model Comparison
-
-The training pipeline compares:
-
-- Persistence baseline
-- Ridge regression
-- Random Forest regression
-- XGBoost when the package is available in the active Python environment
-
-The best model is registered in Hopsworks and also kept locally as a fallback bundle.
-
-## GitHub Actions
-
-Canonical workflow files:
-
-- [feature-pipeline.yml](.github/workflows/feature-pipeline.yml)
-- [training-pipeline.yml](.github/workflows/training-pipeline.yml)
-- [inference-pipeline.yml](.github/workflows/inference-pipeline.yml)
-
-Suggested triggers:
-
-- Feature pipeline: hourly and on push to `main`
-- Training pipeline: weekly on Sunday at midnight UTC
-- Inference pipeline: every 6 hours
-
-Required GitHub variables or secrets:
-
-- `HOPSWORKS_API_KEY`
-- `HOPSWORKS_HOST` and `HOPSWORKS_PROJECT` if your Hopsworks deployment requires them
-- `OPENWEATHER_API_KEY` for the one-year pollution backfill
-
-The workflows read these from GitHub Variables first and fall back to Secrets if needed.
-
-## AQI Categories
-
-| AQI Range | Category | Health Impact |
-|-----------|----------|---------------|
-| 0-50 | 🟢 Good | Air quality is satisfactory |
-| 51-100 | 🟡 Moderate | Acceptable for most people |
-| 101-150 | 🟠 Unhealthy for Sensitive Groups | May affect sensitive individuals |
-| 151-200 | 🔴 Unhealthy | Everyone may experience health effects |
-| 201-300 | 🟣 Very Unhealthy | Health alert: everyone may be affected |
-| 301-500 | 🟤 Hazardous | Emergency conditions |
-
-## Technology Stack
-
-- Python
-- pandas, numpy, scikit-learn, joblib, pyarrow
-- Hopsworks feature store and model registry
-- Open-Meteo APIs
-- OpenWeather pollution history API
-- Streamlit and Plotly for the dashboard
-- GitHub Actions for automation
-
-## Notes
-
-- The project now uses Hopsworks as the primary feature store and model registry path.
-- Local parquet and joblib artifacts remain as a fallback path for validation and offline development.
-- The inference pipeline expects a trained model in Hopsworks or a local fallback bundle plus the historical raw data file.
-
-## License
-
-MIT License - feel free to use and modify as needed.
+- **One location.** Delhi only; the coordinates are set in `config.py`.
+- **Future PM10 is held at its recent mean.** During the forecast, PM10 lags past the first hour use that mean, not a forecast.
+- **Model selection uses one-step RMSE,** while the product is a 72-hour forecast; the backtest is the better selection signal.
+- **The backtest uses observed weather,** so it understates production error.
